@@ -6,12 +6,15 @@ import {
   insertClaimLog,
   getPendingByBotMessageId,
   completePendingRequest,
-  upsertUser
+  upsertUser,
+  cancelActivePending
 } from './db';
 import { requestAndSendPendingVC } from './vc';
+import { sgSendVc, sgLogin, sgGetBaseInfo } from './ml-api'; // NEW IMPORT
 
 const USAGE_SENDVC = "❌ Invalid Use Of Command!\n💡 Usage: `/sendvc [GameID] [ServerID]`\nExample: `/sendvc 12345678 1234`\nOr use `/link` first.";
 const USAGE_CLAIM = "❌ Invalid Use Of Command!\n💡 Full usage: `/claim [GameID] [ServerID] [VCode]`\n💡 Linked usage: `/claim [VCode]`\n💡 Saved usage: `/claim`\n⚠️ Must reply to a CDK message.";
+const USAGE_GETINFO = "❌ Invalid Use Of Command!\n💡 Usage: `/getinfo [GameID] [ServerID]`\n💡 Or if linked: `/getinfo`\n\n🔐 This will ask you to verify ownership via SMS/Email code.";
 
 // Helper to check if VC is exhausted
 function isVcExhausted(respcode: string, apiData: any, message: string, env: Env): boolean {
@@ -37,17 +40,17 @@ export async function handleStart(env: Env, msg: TelegramMessage) {
     "*Commands:*",
     "`/start` — Show welcome/help",
     "`/link [GameID] [ServerID]` — Link account",
-    "`/sendvc [GameID] [ServerID]` — Request VC (Reply to save)",
+    "`/sendvc [GameID] [ServerID]` — Request VC for Redemption",
+    "`/getinfo [GameID] [ServerID]` — Fetch Account Details (Requires VC)",
     "`/claim [GameID] [ServerID] [VCode]` — Redeem CDK",
     "`/status` — Show info",
     "`/cancel` — Cancel pending VC",
     "`/clear` — Reset data",
     "",
-    "*Flow:*",
-    "1. `/link`",
-    "2. `/sendvc` -> Bot asks you to REPLY with code",
-    "3. Reply with code -> Auto-saved",
-    "4. Send CDK -> Reply to CDK with `/claim`",
+    "*Flow for /getinfo:*",
+    "1. Run `/getinfo`",
+    "2. Reply with the received Code",
+    "3. Bot logs in and shows Profile/Language/Rank etc.",
   ].join("\n");
   
   await sendMessage(env, msg.chat.id, helpText);
@@ -82,7 +85,7 @@ export async function handleLink(env: Env, msg: TelegramMessage) {
   });
 
   await sendMessage(env, msg.chat.id, 
-    `✅ Account linked!\n👤 IGN: *${escapeMarkdown(ignResult.name)}*\n\nUse \`/sendvc\` to start.`
+    `✅ Account linked!\n👤 IGN: *${escapeMarkdown(ignResult.name)}*\n\nUse \`/sendvc\` or \`/getinfo\`.`
   );
 }
 
@@ -110,7 +113,6 @@ export async function handleSendVC(env: Env, msg: TelegramMessage) {
   const saved = await getUser(env, userId);
   let ign = saved?.ign || "Unknown";
 
-  // Refresh IGN if possible, but don't block if it fails slightly differently than link
   try {
     const ignResult = await fetchIGN(gameid!, serverid!);
     if (ignResult.success && ignResult.name) ign = ignResult.name;
@@ -125,11 +127,58 @@ export async function handleSendVC(env: Env, msg: TelegramMessage) {
     gameId: gameid!,
     serverId: serverid!,
     ign,
-    source: "manual",
+    source: "manual", // Standard redemption flow
+  });
+}
+
+// NEW COMMAND: GET INFO
+export async function handleGetInfo(env: Env, msg: TelegramMessage) {
+  const args = (msg.text || "").trim().split(/\s+/);
+  const userId = String(msg.from?.id || msg.chat.id);
+  
+  let gameid = args[1];
+  let serverid = args[2];
+
+  if (!gameid || !serverid) {
+    const saved = await getUser(env, userId);
+    if (saved && saved.game_id && saved.server_id) {
+      gameid = saved.game_id;
+      serverid = saved.server_id;
+    } else {
+      return sendMessage(env, msg.chat.id, USAGE_GETINFO);
+    }
+  }
+
+  if (!/^\d+$/.test(gameid!) || !/^\d+$/.test(serverid!)) {
+     return sendMessage(env, msg.chat.id, "❌ IDs must be numbers.");
+  }
+
+  const saved = await getUser(env, userId);
+  let ign = saved?.ign || "Unknown";
+
+  // We don't necessarily need IGN for the API call, but good for UX
+  try {
+    const ignResult = await fetchIGN(gameid!, serverid!);
+    if (ignResult.success && ignResult.name) ign = ignResult.name;
+  } catch(e) {}
+
+  // Trigger VC request specifically marked for 'info'
+  await requestAndSendPendingVC({
+    env,
+    botSendMessage: sendMessage,
+    chatId: msg.chat.id,
+    telegramId: userId,
+    telegramUsername: msg.from?.username || null,
+    gameId: gameid!,
+    serverId: serverid!,
+    ign,
+    source: "info", // MARK AS INFO SOURCE
   });
 }
 
 export async function handleClaim(env: Env, msg: TelegramMessage) {
+  // ... (Keep existing handleClaim code exactly as before) ...
+  // It remains unchanged because it relies on source='manual' or generic handling
   const userId = String(msg.from?.id || msg.chat.id);
   const args = (msg.text || "").trim().split(/\s+/);
   const reply = msg.reply_to_message;
@@ -239,7 +288,6 @@ export async function handleClaim(env: Env, msg: TelegramMessage) {
   const respcode = apiData?.code?.toString() ?? "UNKNOWN";
   const stat = apiData?.status;
   
-  // Simple mapping for display
   const messageMap: Record<string, string> = {
     "0": "Redeemed Successfully!",
     "-20023": "Invalid Game ID",
@@ -333,23 +381,18 @@ export async function handleStatus(env: Env, msg: TelegramMessage) {
 
 export async function handleCancel(env: Env, msg: TelegramMessage) {
   const userId = String(msg.from?.id || msg.chat.id);
-  // Import cancelActivePending from db.ts would be needed here
-  // For brevity, assuming we import it in index.ts or pass it
-  // Let's assume simple implementation inline or imported
-  const { cancelActivePending } = await import('./db'); 
   await cancelActivePending(env, userId);
   await sendMessage(env, msg.chat.id, "🚫 Pending verification request cancelled.");
 }
 
 export async function handleClear(env: Env, msg: TelegramMessage) {
   const userId = String(msg.from?.id || msg.chat.id);
-  const { deleteUser, cancelActivePending } = await import('./db');
   await deleteUser(env, userId);
   await cancelActivePending(env, userId);
   await sendMessage(env, msg.chat.id, "🗑 Data cleared.");
 }
 
-// CRITICAL: Handle replies to pending VC messages
+// UPDATED REPLY HANDLER TO SUPPORT /GETINFO FLOW
 export async function handlePendingCodeReply(env: Env, msg: TelegramMessage): Promise<boolean> {
   if (!msg.reply_to_message) return false;
 
@@ -361,23 +404,11 @@ export async function handlePendingCodeReply(env: Env, msg: TelegramMessage): Pr
   const userId = String(msg.from?.id ?? "");
   const chatId = String(msg.chat.id);
 
-  // Security: Only original requester
-  if (userId !== String(pending.telegram_id)) {
-    return true; // Silently ignore others
-  }
-  
-  // Security: Same chat
-  if (chatId !== String(pending.chat_id)) {
-    return true;
-  }
-
-  if (pending.status !== "pending") {
-    await sendMessage(env, msg.chat.id, `ℹ️ Request is already ${pending.status}.`);
-    return true;
-  }
-
+  if (userId !== String(pending.telegram_id)) return true;
+  if (chatId !== String(pending.chat_id)) return true;
+  if (pending.status !== "pending") return true;
   if (Number(pending.expires_at) <= Date.now()) {
-    await sendMessage(env, msg.chat.id, `⏰ Expired. Use \`/sendvc\` again.`);
+    await sendMessage(env, msg.chat.id, `⏰ Expired. Use \`/sendvc\` or \`/getinfo\` again.`);
     return true;
   }
 
@@ -388,29 +419,83 @@ export async function handlePendingCodeReply(env: Env, msg: TelegramMessage): Pr
   }
 
   try {
+    // Mark pending as completed regardless of purpose
     await completePendingRequest(env, pending.id, code);
-    await upsertUser(env, {
-      telegramId: pending.telegram_id,
-      telegramUsername: msg.from?.username || null,
-      gameId: pending.game_id,
-      serverId: pending.server_id,
-      ign: pending.ign,
-      verificationCode: code,
-      vcStatus: "SAVED",
-      vcMessage: "Saved from reply",
-    });
 
-    await sendMessage(env, msg.chat.id, 
-      `✅ Verification code saved.\n\n` +
-      `🆔 Game ID: \`${pending.game_id}\`\n` +
-      `🔰 Server ID: \`${pending.server_id}\`\n` +
-      `🧾 Code: \`${code}\`\n\n` +
-      `Now reply to a CDK message and send:\n\`/claim\``
-    );
+    // Check PURPOSE
+    if (pending.source === 'info') {
+      // --- HANDLE /GETINFO LOGIC ---
+      await sendMessage(env, msg.chat.id, `🔐 Verifying Identity... Logging in.`);
+      
+      const loginRes = await sgLogin(pending.game_id, pending.server_id, code);
+      
+      if (!loginRes.success || !loginRes.token) {
+        await sendMessage(env, msg.chat.id, `❌ Login Failed: ${escapeMarkdown(loginRes.message)}`);
+        return true;
+      }
+
+      await sendMessage(env, msg.chat.id, `✅ Logged in. Fetching Account Info...`);
+
+      const infoRes = await sgGetBaseInfo(loginRes.token);
+
+      if (!infoRes.success || !infoRes.data) {
+        await sendMessage(env, msg.chat.id, `❌ Failed to fetch info: ${escapeMarkdown(infoRes.message)}`);
+        return true;
+      }
+
+      const d = infoRes.data;
+      // Parse typical ML BaseInfo structure
+      // Note: Field names vary by API version. Adjust based on actual JSON response.
+      const nickname = d.nickname || d.nickName || "Unknown";
+      const level = d.level || d.playerLevel || "?";
+      const rank = d.rank || d.currentRank || "?";
+      const heroCount = d.heroCount || d.totalHeroes || "?";
+      const skinCount = d.skinCount || d.totalSkins || "?";
+      const diamonds = d.diamonds || d.currencyDiamonds || "?";
+      const battlePoints = d.battlePoints || d.bp || "?";
+      const email = d.email ? "***" : "Private"; // Mask email
+      
+      const infoMsg = 
+        `📊 *Account Information*\n\n` +
+        `👤 Nickname: *${escapeMarkdown(nickname)}*\n` +
+        `⭐ Level: \`${level}\`\n` +
+        `🏅 Rank: \`${rank}\`\n` +
+        `🦸 Heroes: \`${heroCount}\`\n` +
+        `🎨 Skins: \`${skinCount}\`\n` +
+        `💎 Diamonds: \`${diamonds}\`\n` +
+        `⚔️ Battle Points: \`${battlePoints}\`\n` +
+        `📧 Email: \`${email}\`\n\n` +
+        `🆔 Game ID: \`${pending.game_id}\`\n` +
+        `🔰 Server ID: \`${pending.server_id}\``;
+
+      await sendMessage(env, msg.chat.id, infoMsg);
+
+    } else {
+      // --- HANDLE STANDARD /SENDVC (REDEMPTION) LOGIC ---
+      await upsertUser(env, {
+        telegramId: pending.telegram_id,
+        telegramUsername: msg.from?.username || null,
+        gameId: pending.game_id,
+        serverId: pending.server_id,
+        ign: pending.ign,
+        verificationCode: code,
+        vcStatus: "SAVED",
+        vcMessage: "Saved from reply",
+      });
+
+      await sendMessage(env, msg.chat.id, 
+        `✅ Verification code saved.\n\n` +
+        `🆔 Game ID: \`${pending.game_id}\`\n` +
+        `🔰 Server ID: \`${pending.server_id}\`\n` +
+        `🧾 Code: \`${code}\`\n\n` +
+        `Now reply to a CDK message and send:\n\`/claim\``
+      );
+    }
+
     return true;
   } catch (error: any) {
     console.error("Save Fail:", error);
-    await sendMessage(env, msg.chat.id, `❌ Failed to save: ${error.message}`);
+    await sendMessage(env, msg.chat.id, `❌ Failed to process: ${error.message}`);
     return true;
   }
 }
