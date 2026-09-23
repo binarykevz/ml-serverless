@@ -4,6 +4,8 @@ export interface Env {
   TELEGRAM_WEBHOOK_SECRET?: string;
   VC_EXHAUSTED_CODES?: string; // Comma separated codes e.g., "-20029"
   VC_EXHAUSTED_TEXT?: string;  // Comma separated texts e.g., "验证码次数用尽"
+  TURSO_DATABASE_URL: string;
+  TURSO_AUTH_TOKEN: string;
 }
 
 export interface TelegramUser {
