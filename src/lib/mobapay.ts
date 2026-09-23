@@ -1,23 +1,28 @@
-import type { IgnResult } from '../types'; // Assuming you have this type, otherwise define it locally
+import type { IgnResult } from '../types';
 
 /**
- * Fetches IGN using the Mobapay App Card API.
- * This endpoint is more reliable for retrieving user-specific data like IGN.
+ * Fetches IGN using the Mobapay App Shop API.
+ * Specifically targets data.user_info.user_name for reliability.
  */
 export async function fetchIGN(gameId: string, serverId: string): Promise<IgnResult> {
-  const baseUrl = 'https://api.mobapay.com/api/app_card';
+  const baseUrl = 'https://api.mobapay.com/api/app_shop';
   
+  // Construct URL exactly as per your curl command
   const params = new URLSearchParams({
     app_id: '100000',
-    country: 'PH',
-    language: 'ph',
     game_user_key: gameId,
     game_server_key: serverId,
+    country: 'PH',
+    language: 'ph',
+    network: '',
+    net: '',
+    coupon_id: '',
+    shop_id: ''
   });
 
   const url = `${baseUrl}?${params.toString()}`;
 
-  // Critical Headers mimicking a modern Brave/Chrome browser on Windows
+  // Exact headers from your provided curl command
   const headers: Record<string, string> = {
     'accept': 'application/json, text/plain, */*',
     'accept-language': 'en-US,en;q=0.6',
@@ -35,7 +40,6 @@ export async function fetchIGN(gameId: string, serverId: string): Promise<IgnRes
     'x-lang': 'ph',
     'x-mm-version': '2.13.39',
     'x-request-start': Date.now().toString(),
-    // Note: x-token is usually empty for public lookups, but included as per curl
     'x-token': '', 
   };
 
@@ -50,76 +54,52 @@ export async function fetchIGN(gameId: string, serverId: string): Promise<IgnRes
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    const data = await response.json();
-    
-    // Debug log to see structure if parsing fails (remove in production)
-    // console.log('Mobapay Response Structure:', JSON.stringify(data, null, 2));
+    const rawData = await response.json();
 
-    const userName = extractUserName(data);
+    // 1. Check for API-level errors first (e.g., invalid ID)
+    if (rawData.code && rawData.code !== 0 && rawData.code !== "0") {
+       return { 
+         success: false, 
+         error: `API Error (${rawData.code}): ${rawData.msg || 'Unknown error'}` 
+       };
+    }
+
+    // 2. Directly parse the expected structure: data.user_info.user_name
+    let userName: string | null = null;
     
+    // Safety check to ensure nested objects exist before accessing properties
+    if (rawData.data && 
+        rawData.data.user_info && 
+        typeof rawData.data.user_info === 'object') {
+      
+      const userInfo = rawData.data.user_info;
+      
+      // Prioritize user_name as requested
+      if (userInfo.user_name && typeof userInfo.user_name === 'string') {
+        userName = userInfo.user_name.trim();
+      } 
+      // Fallback just in case key varies slightly (optional but recommended)
+      else if (userInfo.username && typeof userInfo.username === 'string') {
+        userName = userInfo.username.trim();
+      }
+    }
+
     if (userName) {
       return { success: true, name: userName };
     } else {
-      return { success: false, error: "Username not found in API response" };
+      // Detailed error message showing what WAS found, helping you debug if structure changes
+      const hasData = !!rawData.data;
+      const hasUserInfo = !!(rawData.data && rawData.data.user_info);
+      const userInfoKeys = hasUserInfo ? Object.keys(rawData.data.user_info).join(', ') : 'none';
+      
+      return { 
+        success: false, 
+        error: `Username not found at data.user_info.user_name. Has Data: ${hasData}, Has User Info: ${hasUserInfo}. Keys found: [${userInfoKeys}]` 
+      };
     }
     
   } catch (error: any) {
     console.error('Error fetching IGN from Mobapay:', error.message);
     return { success: false, error: error.message };
   }
-}
-
-/**
- * Recursively searches the JSON object for common username keys.
- * Mobapay structures can vary, so we check multiple known fields.
- */
-function extractUserName(data: any): string | null {
-  const preferredKeys = [
-    'username', 
-    'user_name', 
-    'nick_name', 
-    'nickname', 
-    'player_name', 
-    'role_name', 
-    'game_user_name', 
-    'name',
-    'account_name'
-  ];
-
-  const seen = new WeakSet<object>();
-
-  function walk(node: any): string | null {
-    if (!node || typeof node !== 'object') return null;
-    if (seen.has(node)) return null;
-    seen.add(node);
-
-    // If array, iterate through items
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        const found = walk(item);
-        if (found) return found;
-      }
-      return null;
-    }
-
-    // Check direct properties first for performance
-    for (const key of Object.keys(node)) {
-      if (preferredKeys.includes(key.toLowerCase())) {
-        const value = node[key];
-        if (typeof value === 'string' && value.trim()) {
-          return value.trim();
-        }
-      }
-    }
-
-    // Then recurse into nested objects
-    for (const value of Object.values(node)) {
-      const found = walk(value);
-      if (found) return found;
-    }
-
-    return null;
-  }
-
-  return walk(data);
 }
