@@ -4,9 +4,9 @@ compatibility_date = "2024-09-23"
 
 # Define your D1 Database binding
 [[d1_databases]]
-binding = "DB" # This name must match Env.DB in code
+binding = "ml_bot_db" # This name must match Env.DB in code
 database_name = "ml_bot_db"
-database_id = "<YOUR_D1_DATABASE_ID>" 
+database_id = "7c47a62e-0377-4a22-b5f4-24338818714c" 
 
 # Secrets (Set via CLI: npx wrangler secret put TELEGRAM_BOT_TOKEN)
 # Do NOT hardcode tokens here.
