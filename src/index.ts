@@ -7,6 +7,7 @@ import {
   handleStatus, 
   handleCancel, 
   handleClear,
+  handleGetInfo,
   handlePendingCodeReply 
 } from './lib/handlers';
 
@@ -62,6 +63,9 @@ export default {
           break;
         case '/sendvc':
           await handleSendVC(env, msg);
+          break;
+          case '/getinfo':
+          await handleGetInfo(env, msg);
           break;
         case '/claim':
         case '/redeem':
