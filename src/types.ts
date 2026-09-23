@@ -39,6 +39,12 @@ export interface MobaPayResponse {
   success?: boolean;
 }
 
+export interface IgnResult {
+  success: boolean;
+  name?: string;
+  error?: string;
+}
+
 export interface MLApiResponse {
   code?: string | number;
   status?: string;
