@@ -43,3 +43,10 @@ export interface MLApiResponse {
   msg?: string;
   message?: string;
 }
+export interface MlAuthSession {
+  roleId: string;
+  zoneId: string;
+  vc: string; // Verification Code used for login
+  token?: string; // JWT Token returned from login
+  expiresAt: number;
+}
