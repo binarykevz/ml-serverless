@@ -2,23 +2,23 @@ import type { Env } from '../types';
 
 const BASE_URL = 'https://sg-api.mobilelegends.com';
 
-// Common Headers for SG-API
+// Common Headers for SG-API (Mimicking Brave Browser on Windows)
 function getCommonHeaders(): Record<string, string> {
   return {
     'accept': '*/*',
     'accept-language': 'en-US,en;q=0.9',
-    'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'content-type': 'application/x-www-form-urlencoded; charset=UTF-8', // CRITICAL: Must be form-urlencoded
     'origin': 'https://www.mobilelegends.com',
     'priority': 'u=1, i',
     'referer': 'https://www.mobilelegends.com/',
-    'sec-ch-ua': '"Not=A?Brand";v="99", "Brave";v="151", "Chromium";v="151"',
+    'sec-ch-ua': '"Brave";v="153", "Not_A Brand";v="8", "Chromium";v="153"',
     'sec-ch-ua-mobile': '?0',
     'sec-ch-ua-platform': '"Windows"',
     'sec-fetch-dest': 'empty',
     'sec-fetch-mode': 'cors',
     'sec-fetch-site': 'same-site',
     'sec-gpc': '1',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
   };
 }
 
@@ -29,25 +29,25 @@ export async function sgSendVc(roleId: string, zoneId: string): Promise<{ succes
   const url = `${BASE_URL}/base/sendVc`;
   
   try {
+    const body = new URLSearchParams({
+      roleId,
+      zoneId,
+      language: 'en',
+      country: 'SG', // Adjust based on region if needed
+      net: '',
+    });
+
     const response = await fetch(url, {
       method: 'POST',
       headers: getCommonHeaders(),
-      body: new URLSearchParams({
-        roleId,
-        zoneId,
-        language: 'en',
-        // Some APIs require these extra params
-        country: 'SG', 
-        net: '',
-      }).toString(),
+      body: body.toString(),
       signal: AbortSignal.timeout(10000),
     });
 
     const data = await response.json();
     
-    // Typical response: { code: 0, msg: "Success", data: {...} }
-    const code = data.code?.toString();
-    const isSuccess = code === '0' || data.status === 'success';
+    // Check for success code (usually 0 or 200 depending on API version)
+    const isSuccess = data.code === 0 || data.status === 'success' || data.code === '0';
 
     return {
       success: isSuccess,
@@ -64,38 +64,46 @@ export async function sgSendVc(roleId: string, zoneId: string): Promise<{ succes
 
 /**
  * Step 2: Login to get JWT Token
- * NOTE: The 'validate' param in your curl seems to be a CAPTCHA/security token. 
- * If this fails, you may need to inspect Network tab in browser to see if 'validate' is mandatory.
- * For now, we send what we have. If 'validate' is required, you might need to hardcode a dummy 
- * or solve it dynamically (very hard in serverless).
+ * NOTE: This function attempts login WITHOUT validate token first. 
+ * If it fails, you may need to manually capture the 'validate' string from browser DevTools 
+ * and pass it here, or integrate a CAPTCHA solver.
  */
 export async function sgLogin(roleId: string, zoneId: string, vc: string, validateStr?: string): Promise<{ success: boolean; token?: string; message: string }> {
   const url = `${BASE_URL}/base/login`;
   
-  const bodyParams: Record<string, string> = {
+  // Build body parameters
+  const params: Record<string, string> = {
     roleId,
     zoneId,
     vc,
-    referer: '2669606_2669607', // From your curl
+    referer: '2669606_2669607', // Hardcoded from your curl example
     type: 'web',
   };
 
-  if (validateStr) {
-    bodyParams.validate = validateStr;
+  // Only include validate if provided (some APIs reject empty strings)
+  if (validateStr && validateStr.trim() !== '') {
+    params.validate = validateStr;
   }
+
+  const body = new URLSearchParams(params);
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: getCommonHeaders(),
-      body: new URLSearchParams(bodyParams).toString(),
+      body: body.toString(),
       signal: AbortSignal.timeout(10000),
     });
 
     const data = await response.json();
     
-    // Response usually contains: { code: 0, data: { token: "..." } }
-    if (data.code === 0 && data.data?.token) {
+    // Debug: Log the full response if it fails
+    if (data.code !== 0 && data.code !== '0') {
+        console.error('ML Login API Error Response:', JSON.stringify(data));
+    }
+
+    // Success condition: code is 0 AND token exists in data
+    if ((data.code === 0 || data.code === '0') && data.data?.token) {
       return {
         success: true,
         token: data.data.token,
@@ -103,9 +111,15 @@ export async function sgLogin(roleId: string, zoneId: string, vc: string, valida
       };
     }
 
+    // Specific error handling for missing validate
+    let errorMsg = data.msg || data.message || 'Login Failed';
+    if (errorMsg.includes('validate') || errorMsg.includes('captcha')) {
+        errorMsg += " (Hint: Missing or invalid CAPTCHA token. Try capturing 'validate' from browser network tab.)";
+    }
+
     return {
       success: false,
-      message: data.msg || data.message || 'Login Failed',
+      message: errorMsg,
     };
 
   } catch (error: any) {
@@ -129,20 +143,20 @@ export async function sgGetBaseInfo(token: string): Promise<{ success: boolean; 
     'x-actid': '2669607',
     'x-appid': '2669606',
     'x-lang': 'en',
-    'content-length': '0',
+    'content-length': '0', // Important for POST with no body
   };
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: '', // Empty body as per curl
+      body: '', // Empty body
       signal: AbortSignal.timeout(10000),
     });
 
     const data = await response.json();
 
-    if (data.code === 0) {
+    if (data.code === 0 || data.code === '0') {
       return {
         success: true,
         data: data.data,
