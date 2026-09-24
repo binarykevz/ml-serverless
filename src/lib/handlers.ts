@@ -467,8 +467,6 @@ export async function handlePendingCodeReply(ctx: MyCtx): Promise<boolean> {
       vcMessage: "Saved from reply",
     });
 
-    // ... inside handlePendingCodeReply ...
-    
     await ctx.reply(
       `✅ Verification code saved.\n\n` +
       `🆔 Game ID: \`${pending.game_id}\`\n` +
@@ -478,14 +476,12 @@ export async function handlePendingCodeReply(ctx: MyCtx): Promise<boolean> {
       { parse_mode: 'Markdown' }
     );
 
-    // ✅ FIXED: Use ctx.api.deleteMessage explicitly
-    // We wrap it in try/catch because if the message was already deleted or blocked, 
-    // we don't want the whole handler to crash.
+    // ✅ FIXED: Use positional arguments (chat_id, message_id)
     try {
-      await ctx.api.deleteMessage({
-        chat_id: ctx.chat!.id, // Safe assertion as we checked chat earlier
-        message_id: replyMessageId
-      });
+      // Ensure chat exists before accessing id
+      if (ctx.chat) {
+        await ctx.api.deleteMessage(ctx.chat.id, replyMessageId);
+      }
     } catch (deleteError) {
       console.warn("Could not delete prompt message:", deleteError);
     }
