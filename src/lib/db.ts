@@ -3,9 +3,6 @@ import type { Env } from "../types";
 
 let dbClient: Client | null = null;
 
-/**
- * Initialize or retrieve the cached Turso client.
- */
 function getClient(env: Env): Client {
   if (!dbClient) {
     const url = env.TURSO_DATABASE_URL;
@@ -21,32 +18,6 @@ function getClient(env: Env): Client {
     });
   }
   return dbClient;
-}
-
-/**
- * Ensure tables exist. Call this once during cold start or before first query.
- * For simplicity in this example, we assume schema.sql has been run manually 
- * against the Turso DB. If you want auto-migration, uncomment below.
- */
-export async function initDb(env: Env) {
-  const db = getClient(env);
-  
-  // Optional: Auto-create tables if they don't exist
-  /*
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS ml_users (
-      telegram_id TEXT PRIMARY KEY,
-      telegram_username TEXT,
-      game_id TEXT,
-      server_id TEXT,
-      ign TEXT,
-      verification_code TEXT,
-      vc_status TEXT,
-      vc_message TEXT,
-      updated_at INTEGER NOT NULL
-    );
-  `);
-  */
 }
 
 // --- User Operations ---
@@ -97,12 +68,10 @@ export async function upsertUser(env: Env, data: {
 
 export async function getUser(env: Env, telegramId: string): Promise<any | null> {
   const db = getClient(env);
-  
   const result = await db.execute({
     sql: 'SELECT * FROM ml_users WHERE telegram_id = ?',
     args: [telegramId],
   });
-
   return result.rows[0] ?? null;
 }
 
@@ -114,28 +83,25 @@ export async function deleteUser(env: Env, telegramId: string) {
   });
 }
 
-// --- Claim Log Operations ---
-
-export async function insertClaimLog(env: Env, data: {
-  telegramId: string;
-  telegramUsername?: string | null;
-  gameId?: string | null;
-  serverId?: string | null;
-  ign?: string | null;
-  cdk?: string | null;
-  vcode?: string | null;
-  status?: string | null;
-  message?: string | null;
-}) {
+export async function isUserLinked(env: Env, telegramId: string): Promise<boolean> {
   const db = getClient(env);
-  
+  const result = await db.execute({
+    sql: 'SELECT COUNT(*) as count FROM ml_users WHERE telegram_id = ? AND game_id IS NOT NULL',
+    args: [telegramId],
+  });
+  return Number(result.rows[0]?.count || 0) > 0;
+}
+
+// --- Claim Logs ---
+
+export async function insertClaimLog(env: Env, data: any) {
+  const db = getClient(env);
   const sql = `
     INSERT INTO claim_logs (
       telegram_id, telegram_username, game_id, server_id, 
       ign, cdk, vcode, status, message, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
-
   await db.execute({
     sql,
     args: [
@@ -155,21 +121,14 @@ export async function insertClaimLog(env: Env, data: {
 
 export async function getLatestClaimLog(env: Env, telegramId: string): Promise<any | null> {
   const db = getClient(env);
-  
   const result = await db.execute({
-    sql: `
-      SELECT * FROM claim_logs 
-      WHERE telegram_id = ? 
-      ORDER BY created_at DESC, id DESC 
-      LIMIT 1
-    `,
+    sql: `SELECT * FROM claim_logs WHERE telegram_id = ? ORDER BY created_at DESC LIMIT 1`,
     args: [telegramId],
   });
-  
   return result.rows[0] ?? null;
 }
 
-// --- Pending VC Operations ---
+// --- Pending VC Requests ---
 
 export async function createPendingRequest(env: Env, data: {
   telegramId: string;
@@ -182,14 +141,12 @@ export async function createPendingRequest(env: Env, data: {
   expiresAt: number;
 }): Promise<number | null> {
   const db = getClient(env);
-  
   const sql = `
     INSERT INTO pending_vc_requests (
       telegram_id, chat_id, game_id, server_id, ign, 
       bot_message_id, status, source, created_at, expires_at
     ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
   `;
-
   const result = await db.execute({
     sql,
     args: [
@@ -204,82 +161,49 @@ export async function createPendingRequest(env: Env, data: {
       data.expiresAt,
     ],
   });
-
-  // libsql returns lastInsertRowid as bigint or number depending on config
   return Number(result.lastInsertRowid);
 }
 
 export async function getPendingByBotMessageId(env: Env, botMessageId: number): Promise<any | null> {
   const db = getClient(env);
-  
   const result = await db.execute({
-    sql: `
-      SELECT * FROM pending_vc_requests 
-      WHERE bot_message_id = ? 
-      ORDER BY id DESC 
-      LIMIT 1
-    `,
+    sql: `SELECT * FROM pending_vc_requests WHERE bot_message_id = ? ORDER BY id DESC LIMIT 1`,
     args: [botMessageId],
   });
-  
   return result.rows[0] ?? null;
 }
 
 export async function getActivePendingByTelegramId(env: Env, telegramId: string): Promise<any | null> {
   const db = getClient(env);
   const now = Date.now();
-  
   const result = await db.execute({
-    sql: `
-      SELECT * FROM pending_vc_requests 
-      WHERE telegram_id = ? AND status = 'pending' AND expires_at > ?
-      ORDER BY id DESC 
-      LIMIT 1
-    `,
+    sql: `SELECT * FROM pending_vc_requests WHERE telegram_id = ? AND status = 'pending' AND expires_at > ? ORDER BY id DESC LIMIT 1`,
     args: [telegramId, now],
   });
-  
   return result.rows[0] ?? null;
 }
 
 export async function getRecentAutoPending(env: Env, telegramId: string, sinceTimestamp: number): Promise<any | null> {
   const db = getClient(env);
-  
   const result = await db.execute({
-    sql: `
-      SELECT * FROM pending_vc_requests 
-      WHERE telegram_id = ? AND source = 'auto' AND created_at > ?
-      ORDER BY id DESC 
-      LIMIT 1
-    `,
+    sql: `SELECT * FROM pending_vc_requests WHERE telegram_id = ? AND source = 'auto' AND created_at > ? ORDER BY id DESC LIMIT 1`,
     args: [telegramId, sinceTimestamp],
   });
-  
   return result.rows[0] ?? null;
 }
 
 export async function completePendingRequest(env: Env, pendingId: number, code: string) {
   const db = getClient(env);
-  
   await db.execute({
-    sql: `
-      UPDATE pending_vc_requests 
-      SET status = 'completed', code = ?, completed_at = ? 
-      WHERE id = ? AND status = 'pending'
-    `,
+    sql: `UPDATE pending_vc_requests SET status = 'completed', code = ?, completed_at = ? WHERE id = ? AND status = 'pending'`,
     args: [code, Date.now(), pendingId],
   });
 }
 
 export async function cancelActivePending(env: Env, telegramId: string) {
   const db = getClient(env);
-  
   await db.execute({
-    sql: `
-      UPDATE pending_vc_requests 
-      SET status = 'cancelled' 
-      WHERE telegram_id = ? AND status = 'pending'
-    `,
+    sql: `UPDATE pending_vc_requests SET status = 'cancelled' WHERE telegram_id = ? AND status = 'pending'`,
     args: [telegramId],
   });
 }
