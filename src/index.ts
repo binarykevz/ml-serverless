@@ -1,7 +1,6 @@
-// src/index.ts
 import { Hono } from 'hono';
 import { Bot } from 'grammy';
-import type { Env, MyContext } from './types';
+import type { Env } from './types';
 import { 
   handleStart, 
   handleHelp,
@@ -20,7 +19,6 @@ const app = new Hono<{ Bindings: Env }>();
 app.post('/', async (c) => {
   const env = c.env;
   
-  // Verify Secret Token
   const secret = c.req.header('X-Telegram-Bot-Api-Secret-Token');
   if (env.TELEGRAM_WEBHOOK_SECRET && secret !== env.TELEGRAM_WEBHOOK_SECRET) {
     return c.text('Unauthorized', 401);
@@ -33,39 +31,45 @@ app.post('/', async (c) => {
     return c.text('Bad Request', 400);
   }
 
-  // Initialize Bot
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
-  // Register Handlers
   bot.catch(async (err) => {
     console.error('Global Bot Error:', err);
   });
 
-  bot.command('start', handleStart);
-  bot.command('help', handleHelp);
-  bot.command('link', handleLink);
-  bot.command('unlink', handleUnlink);
-  bot.command('sendvc', handleSendVC);
-  bot.command('claim', handleClaim);
-  bot.command('redeem', handleClaim);
-  bot.command('status', handleStatus);
-  bot.command('cancel', handleCancel);
-  bot.command('clear', handleClear);
+  // Wrap handlers to inject env
+  const wrapHandler = (handler: Function) => {
+    return async (ctx: any) => {
+      // Inject env into context
+      ctx.env = env;
+      await handler(ctx);
+    };
+  };
 
-  bot.on('message:text', async (ctx) => {
+  bot.command('start', wrapHandler(handleStart));
+  bot.command('help', wrapHandler(handleHelp));
+  bot.command('link', wrapHandler(handleLink));
+  bot.command('unlink', wrapHandler(handleUnlink));
+  bot.command('sendvc', wrapHandler(handleSendVC));
+  bot.command('claim', wrapHandler(handleClaim));
+  bot.command('redeem', wrapHandler(handleClaim));
+  bot.command('status', wrapHandler(handleStatus));
+  bot.command('cancel', wrapHandler(handleCancel));
+  bot.command('clear', wrapHandler(handleClear));
+
+  bot.on('message:text', async (ctx: any) => {
     if (ctx.message?.text?.startsWith('/')) {
       return;
     }
-    const handled = await handlePendingCodeReply(ctx as MyContext);
+    ctx.env = env;
+    const handled = await handlePendingCodeReply(ctx);
     if (handled) {
       return;
     }
   });
 
-  // Process Update with Environment Injection
-  // Grammy allows passing additional context properties via the second argument of handleUpdate
   try {
-    await bot.handleUpdate(update, { env });
+    await bot.handleUpdate(update);
   } catch (error: any) {
     console.error('Error processing update:', error);
   }
