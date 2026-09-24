@@ -19,6 +19,7 @@ const app = new Hono<{ Bindings: Env }>();
 app.post('/', async (c) => {
   const env = c.env;
   
+  // Verify Secret Token
   const secret = c.req.header('X-Telegram-Bot-Api-Secret-Token');
   if (env.TELEGRAM_WEBHOOK_SECRET && secret !== env.TELEGRAM_WEBHOOK_SECRET) {
     return c.text('Unauthorized', 401);
@@ -31,40 +32,80 @@ app.post('/', async (c) => {
     return c.text('Bad Request', 400);
   }
 
-  const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+  // Initialize Bot WITHOUT auto-init to prevent "Bot not initialized" errors
+  // We pass an empty object or null to skip the getMe call
+  const bot = new Bot(env.TELEGRAM_BOT_TOKEN, {
+    botInfo: {
+      id: 0, // Dummy ID
+      is_bot: true,
+      first_name: "ML Bot",
+      username: "ml_telegram_bot", // Dummy username
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      supports_inline_queries: false,
+    }
+  });
 
   bot.catch(async (err) => {
     console.error('Global Bot Error:', err);
   });
 
-  // Wrap handlers to inject env
+  // Helper to inject env into context
   const wrapHandler = (handler: Function) => {
     return async (ctx: any) => {
-      // Inject env into context
       ctx.env = env;
       await handler(ctx);
     };
   };
 
-  bot.command('start', wrapHandler(handleStart));
-  bot.command('help', wrapHandler(handleHelp));
-  bot.command('link', wrapHandler(handleLink));
-  bot.command('unlink', wrapHandler(handleUnlink));
-  bot.command('sendvc', wrapHandler(handleSendVC));
-  bot.command('claim', wrapHandler(handleClaim));
-  bot.command('redeem', wrapHandler(handleClaim));
-  bot.command('status', wrapHandler(handleStatus));
-  bot.command('cancel', wrapHandler(handleCancel));
-  bot.command('clear', wrapHandler(handleClear));
-
+  // Manual Command Routing instead of bot.command() to avoid init checks
   bot.on('message:text', async (ctx: any) => {
-    if (ctx.message?.text?.startsWith('/')) {
-      return;
-    }
     ctx.env = env;
-    const handled = await handlePendingCodeReply(ctx);
-    if (handled) {
-      return;
+    
+    const text = ctx.message?.text || "";
+    const args = text.trim().split(/\s+/);
+    const cmd = args[0].toLowerCase().split('@')[0];
+
+    // Handle Verification Code Replies (Non-commands)
+    if (!cmd.startsWith('/')) {
+      const handled = await handlePendingCodeReply(ctx);
+      if (handled) return;
+      return; // Ignore other non-command texts
+    }
+
+    // Route Commands
+    switch (cmd) {
+      case '/start':
+        await handleStart(ctx);
+        break;
+      case '/help':
+        await handleHelp(ctx);
+        break;
+      case '/link':
+        await handleLink(ctx);
+        break;
+      case '/unlink':
+        await handleUnlink(ctx);
+        break;
+      case '/sendvc':
+        await handleSendVC(ctx);
+        break;
+      case '/claim':
+      case '/redeem':
+        await handleClaim(ctx);
+        break;
+      case '/status':
+        await handleStatus(ctx);
+        break;
+      case '/cancel':
+        await handleCancel(ctx);
+        break;
+      case '/clear':
+        await handleClear(ctx);
+        break;
+      default:
+        // Unknown command
+        break;
     }
   });
 
