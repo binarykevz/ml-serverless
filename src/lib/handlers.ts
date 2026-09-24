@@ -1,5 +1,5 @@
-import type { Context } from 'grammy';
-import type { Env } from '../types';
+// src/lib/handlers.ts
+import type { MyContext } from '../types'; // Use custom context
 import { fetchIGN } from './mobapay';
 import { 
   getUser, 
@@ -14,7 +14,6 @@ import {
 } from './db';
 import { requestAndSendPendingVC } from './vc';
 
-// Helper for markdown escaping
 function escapeMarkdown(text: string): string {
   if (!text) return '';
   return String(text).replace(/[_*`[\]]/g, '\\$&');
@@ -24,7 +23,6 @@ const USAGE_SENDVC = "❌ Invalid Use Of Command!\n💡 Usage: `/sendvc [GameID]
 const USAGE_CLAIM = "❌ Invalid Use Of Command!\n💡 Full usage: `/claim [GameID] [ServerID] [VCode]`\n💡 Linked usage: `/claim [VCode]`\n💡 Saved usage: `/claim`\n⚠️ Must reply to a CDK message.";
 const USAGE_LINK = "❌ Invalid Use Of Command!\n💡 Usage: `/link [GameID] [ServerID]`\n\n⚠️ You can only link ONE account at a time.\nUse `/unlink` first if you want to change accounts.";
 
-// ✅ UPDATED: Comprehensive Response Messages Map
 const responseMessages: Record<string, string> = {
     "-20023": "Invalid Game ID",
     "-20024": "Invalid Server ID",
@@ -51,11 +49,11 @@ const responseMessages: Record<string, string> = {
     "1036": "The amount limitation of CDKey redeemption"
 };
 
-function isVcExhausted(respcode: string, apiData: any, message: string, env: Env): boolean {
-  const configuredCodes = (env.VC_EXHAUSTED_CODES || "").split(",").map(s => s.trim()).filter(Boolean);
+function isVcExhausted(respcode: string, apiData: any, message: string, ctx: MyContext): boolean {
+  const configuredCodes = (ctx.env.VC_EXHAUSTED_CODES || "").split(",").map(s => s.trim()).filter(Boolean);
   if (configuredCodes.includes(String(respcode))) return true;
 
-  const configuredTexts = (env.VC_EXHAUSTED_TEXT || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const configuredTexts = (ctx.env.VC_EXHAUSTED_TEXT || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   const defaultTexts = ["验证码次数用尽", "次数用尽", "verification code limit", "vcode limit"];
   const texts = [...defaultTexts, ...configuredTexts];
 
@@ -67,7 +65,7 @@ function isVcExhausted(respcode: string, apiData: any, message: string, env: Env
   return texts.some(t => haystack.includes(t));
 }
 
-export async function handleStart(ctx: Context<Env>) {
+export async function handleStart(ctx: MyContext) {
   const helpText = [
     "🤖 *Mobile Legends Serverless Bot*",
     "",
@@ -92,11 +90,11 @@ export async function handleStart(ctx: Context<Env>) {
   await ctx.reply(helpText, { parse_mode: 'Markdown' });
 }
 
-export async function handleHelp(ctx: Context<Env>) {
+export async function handleHelp(ctx: MyContext) {
   await handleStart(ctx);
 }
 
-export async function handleLink(ctx: Context<Env>) {
+export async function handleLink(ctx: MyContext) {
   const args = (ctx.message?.text || "").trim().split(/\s+/);
   const gameid = args[1];
   const serverid = args[2];
@@ -116,7 +114,6 @@ export async function handleLink(ctx: Context<Env>) {
     );
   }
 
-  // Typing Indicator
   await ctx.api.sendChatAction(ctx.chat.id, 'typing');
   
   const ignResult = await fetchIGN(gameid, serverid);
@@ -145,7 +142,7 @@ export async function handleLink(ctx: Context<Env>) {
   );
 }
 
-export async function handleUnlink(ctx: Context<Env>) {
+export async function handleUnlink(ctx: MyContext) {
   const userId = String(ctx.from?.id || ctx.chat.id);
   
   const row = await getUser(ctx.env, userId);
@@ -167,7 +164,7 @@ export async function handleUnlink(ctx: Context<Env>) {
   );
 }
 
-export async function handleSendVC(ctx: Context<Env>) {
+export async function handleSendVC(ctx: MyContext) {
   const args = (ctx.message?.text || "").trim().split(/\s+/);
   const userId = String(ctx.from?.id || ctx.chat.id);
   
@@ -191,7 +188,6 @@ export async function handleSendVC(ctx: Context<Env>) {
   const saved = await getUser(ctx.env, userId);
   let ign = saved?.ign || "Unknown";
 
-  // Typing Indicator
   await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 
   try {
@@ -208,7 +204,7 @@ export async function handleSendVC(ctx: Context<Env>) {
   });
 }
 
-export async function handleClaim(ctx: Context<Env>) {
+export async function handleClaim(ctx: MyContext) {
   const userId = String(ctx.from?.id || ctx.chat.id);
   const args = (ctx.message?.text || "").trim().split(/\s+/);
   const reply = ctx.message?.reply_to_message;
@@ -251,7 +247,6 @@ export async function handleClaim(ctx: Context<Env>) {
     return ctx.reply("❌ Invalid format.");
   }
 
-  // Typing Indicator
   await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 
   await ctx.reply(`🔁 Checking Account...\n🆔 \`${gameid}\`\n🔰 \`${serverid}\``, { parse_mode: 'Markdown' });
@@ -301,7 +296,9 @@ export async function handleClaim(ctx: Context<Env>) {
       }),
       signal: AbortSignal.timeout(15000),
     });
-    apiData = await response.json();
+    
+    // Cast to any to avoid unknown type errors
+    apiData = await response.json() as any;
   } catch (error: any) {
     apiError = error.response?.data?.msg || error.response?.data?.message || error.message;
   }
@@ -321,10 +318,8 @@ export async function handleClaim(ctx: Context<Env>) {
   const respcode = apiData?.code?.toString() ?? "UNKNOWN";
   const stat = apiData?.status;
   
-  // ✅ USE THE COMPREHENSIVE MAP HERE
   let message = responseMessages[respcode];
 
-  // Fallback if code is not in map but API returned a message
   if (!message) {
     const apiMsg = apiData?.msg || apiData?.message;
     if (apiMsg && String(apiMsg) !== respcode) {
@@ -334,7 +329,7 @@ export async function handleClaim(ctx: Context<Env>) {
     }
   }
 
-  const exhausted = isVcExhausted(respcode, apiData, message, ctx.env);
+  const exhausted = isVcExhausted(respcode, apiData, message, ctx);
   let autoNote = "";
 
   if (exhausted) {
@@ -381,7 +376,7 @@ export async function handleClaim(ctx: Context<Env>) {
   await ctx.reply(resultMsg, { parse_mode: 'Markdown' });
 }
 
-export async function handleStatus(ctx: Context<Env>) {
+export async function handleStatus(ctx: MyContext) {
   const userId = String(ctx.from?.id || ctx.chat.id);
   const row = await getUser(ctx.env, userId);
 
@@ -411,21 +406,20 @@ export async function handleStatus(ctx: Context<Env>) {
   );
 }
 
-export async function handleCancel(ctx: Context<Env>) {
+export async function handleCancel(ctx: MyContext) {
   const userId = String(ctx.from?.id || ctx.chat.id);
   await cancelActivePending(ctx.env, userId);
   await ctx.reply("🚫 Pending verification request cancelled.");
 }
 
-export async function handleClear(ctx: Context<Env>) {
+export async function handleClear(ctx: MyContext) {
   const userId = String(ctx.from?.id || ctx.chat.id);
   await deleteUser(ctx.env, userId);
   await cancelActivePending(ctx.env, userId);
   await ctx.reply("🗑 All data cleared. Use `/link` to start over.");
 }
 
-// UPDATED REPLY HANDLER WITH AUTO-DELETE USING GRAMMY
-export async function handlePendingCodeReply(ctx: Context<Env>): Promise<boolean> {
+export async function handlePendingCodeReply(ctx: MyContext): Promise<boolean> {
   if (!ctx.message?.reply_to_message) return false;
 
   const replyMessageId = ctx.message.reply_to_message.message_id;
@@ -473,7 +467,6 @@ export async function handlePendingCodeReply(ctx: Context<Env>): Promise<boolean
       { parse_mode: 'Markdown' }
     );
 
-    // AUTO-DELETE THE ORIGINAL PROMPT MESSAGE
     await ctx.deleteMessage(replyMessageId);
 
     return true;
