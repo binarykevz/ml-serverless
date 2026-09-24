@@ -1,6 +1,6 @@
-import type { Context } from 'grammy';
-import type { Env } from '../types';
-import { escapeMarkdown } from './telegram'; // Keep this helper or move inside
+// src/lib/vc.ts
+import type { MyContext } from '../types'; // Import custom context
+import { escapeMarkdown } from './telegram'; // Ensure this helper exists or inline it
 import { 
   upsertUser, 
   getActivePendingByTelegramId, 
@@ -8,66 +8,12 @@ import {
   createPendingRequest 
 } from './db';
 
-const PENDING_TTL_MS = 10 * 60 * 1000;
-const AUTO_COOLDOWN_MS = 60 * 1000;
-
-const BLOCKING_VC_CODES = new Set(['-20023', '-20024', '-20025', '-20027', '9601']);
-
-const responseMessages: Record<string, string> = {
-  "9601": "Error sending and receiving vcode",
-  "-20023": "Invalid Game ID",
-  "-20024": "Invalid Server ID",
-  "-20025": "Game ID and Server ID do not match",
-  "-20027": "Request too Frequent!...",
-  "-20028": "Verification code already sent...",
-  "-20010": "Invalid Verification Code!",
-  "0": "Verification Code Sent Successfully!",
-};
-
-function parseSendVcResponse(apiData: any) {
-  const respcode = apiData?.code?.toString() ?? "UNKNOWN";
-  const stat = apiData?.status;
-  let message = responseMessages[respcode];
-  if (!message) {
-    const apiMsg = apiData?.msg || apiData?.message;
-    if (apiMsg && String(apiMsg) !== respcode) {
-      message = String(apiMsg);
-    } else {
-      message = `Unknown code: ${respcode}`;
-    }
-  }
-  return { respcode, stat, message };
-}
-
-async function callSendMail(gameId: string, serverId: string) {
-  try {
-    const response = await fetch("https://api.mobilelegends.com/mlweb/sendMail", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        referer: "https://www.mobilelegends.com/",
-      },
-      body: JSON.stringify({
-        roleId: gameId,
-        zoneId: serverId,
-        language: "en",
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
-    const data = await response.json();
-    return { apiData: data, error: null };
-  } catch (error: any) {
-    const rawError = error.response?.data?.msg || error.response?.data?.message || error.message;
-    const errorMessage = typeof rawError === "string" ? rawError : JSON.stringify(rawError);
-    return { apiData: null, error: errorMessage };
-  }
-}
+// ... (keep constants like PENDING_TTL_MS, BLOCKING_VC_CODES, etc.) ...
 
 /**
- * Refactored to use Grammy Context
+ * Refactored to use MyContext
  */
-export async function requestAndSendPendingVC(ctx: Context<Env>, params: {
+export async function requestAndSendPendingVC(ctx: MyContext, params: {
   telegramId: string;
   gameId: string;
   serverId: string;
@@ -75,7 +21,7 @@ export async function requestAndSendPendingVC(ctx: Context<Env>, params: {
   source?: "manual" | "auto";
 }) {
   const { telegramId, gameId, serverId, ign, source = "manual" } = params;
-  const env = ctx.env;
+  const env = ctx.env; // Access env from context
   const now = Date.now();
 
   try {
