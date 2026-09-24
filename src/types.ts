@@ -1,11 +1,10 @@
 export interface Env {
-  DB: D1Database;
   TELEGRAM_BOT_TOKEN: string;
-  TELEGRAM_WEBHOOK_SECRET?: string;
-  VC_EXHAUSTED_CODES?: string; // Comma separated codes e.g., "-20029"
-  VC_EXHAUSTED_TEXT?: string;  // Comma separated texts e.g., "验证码次数用尽"
   TURSO_DATABASE_URL: string;
   TURSO_AUTH_TOKEN: string;
+  TELEGRAM_WEBHOOK_SECRET?: string;
+  VC_EXHAUSTED_CODES?: string;
+  VC_EXHAUSTED_TEXT?: string;
 }
 
 export interface TelegramUser {
@@ -33,28 +32,8 @@ export interface Update {
   message?: TelegramMessage;
 }
 
-// API Response Structures
-export interface MobaPayResponse {
-  data?: any;
-  success?: boolean;
-}
-
 export interface IgnResult {
   success: boolean;
   name?: string;
   error?: string;
-}
-
-export interface MLApiResponse {
-  code?: string | number;
-  status?: string;
-  msg?: string;
-  message?: string;
-}
-export interface MlAuthSession {
-  roleId: string;
-  zoneId: string;
-  vc: string; // Verification Code used for login
-  token?: string; // JWT Token returned from login
-  expiresAt: number;
 }
