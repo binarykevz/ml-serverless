@@ -15,6 +15,25 @@ import {
 } from './lib/handlers';
 
 const app = new Hono<{ Bindings: Env }>();
+  // Initialize Bot WITHOUT auto-init
+  const bot = new Bot(env.TELEGRAM_BOT_TOKEN, {
+    botInfo: {
+      id: 0,
+      is_bot: true,
+      first_name: "Truffle Bot",
+      username: "itskevz_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      supports_inline_queries: false,
+      // Add these missing fields required by newer Grammy types
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+      can_manage_bots: false, 
+      // If there are more errors, you can use 'as any' below instead
+    } as any 
+  });
 
 app.post('/', async (c) => {
   const env = c.env;
