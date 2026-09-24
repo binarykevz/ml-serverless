@@ -1,6 +1,7 @@
+// src/index.ts
 import { Hono } from 'hono';
 import { Bot } from 'grammy';
-import type { Env } from './types';
+import type { Env, MyContext } from './types';
 import { 
   handleStart, 
   handleHelp,
@@ -14,14 +15,7 @@ import {
   handlePendingCodeReply 
 } from './lib/handlers';
 
-// Initialize Hono app
 const app = new Hono<{ Bindings: Env }>();
-
-// Initialize Grammy Bot
-// Note: We create this inside the module scope so it persists across warm starts if possible,
-// but in CF Workers, env vars are only available per-request. 
-// So we initialize it INSIDE the handler but keep logic clean.
-let botInstance: Bot<Env> | null = null;
 
 app.post('/', async (c) => {
   const env = c.env;
@@ -32,7 +26,6 @@ app.post('/', async (c) => {
     return c.text('Unauthorized', 401);
   }
 
-  // Parse Body manually to avoid double-parsing issues
   let update;
   try {
     update = await c.req.json();
@@ -40,56 +33,43 @@ app.post('/', async (c) => {
     return c.text('Bad Request', 400);
   }
 
-  // Initialize Bot if not already done (or just create fresh instance per request for simplicity in CF)
-  // Creating fresh is safer for stateless environments like Workers
+  // Initialize Bot
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
-  // --- Register Handlers ---
-  
-  // Global Error Handler
+  // Register Handlers
   bot.catch(async (err) => {
     console.error('Global Bot Error:', err);
-    // Optional: Send error message to admin chat here
   });
 
-  // Commands
   bot.command('start', handleStart);
   bot.command('help', handleHelp);
   bot.command('link', handleLink);
   bot.command('unlink', handleUnlink);
   bot.command('sendvc', handleSendVC);
   bot.command('claim', handleClaim);
-  bot.command('redeem', handleClaim); // Alias
+  bot.command('redeem', handleClaim);
   bot.command('status', handleStatus);
   bot.command('cancel', handleCancel);
   bot.command('clear', handleClear);
 
-  // Text Handler for Verification Codes (Non-command replies)
   bot.on('message:text', async (ctx) => {
-    // If it's a command, skip (commands are handled above by priority)
-    // However, Grammy routes commands first. This listener catches non-commands.
-    
-    // Check if it's a reply to a pending VC
-    const handled = await handlePendingCodeReply(ctx);
+    if (ctx.message?.text?.startsWith('/')) {
+      return;
+    }
+    const handled = await handlePendingCodeReply(ctx as MyContext);
     if (handled) {
       return;
     }
-    
-    // Ignore other text messages silently
   });
 
-  // --- Process Update ---
-  
-  // Use bot.handleUpdate which returns a Promise<void>
-  // It automatically handles the Telegram API responses internally
+  // Process Update with Environment Injection
+  // Grammy allows passing additional context properties via the second argument of handleUpdate
   try {
-    await bot.handleUpdate(update);
+    await bot.handleUpdate(update, { env });
   } catch (error: any) {
     console.error('Error processing update:', error);
-    // Return 200 OK anyway to prevent Telegram from retrying indefinitely on bad data
   }
 
-  // Always return 200 OK to acknowledge receipt
   return c.text('OK', 200);
 });
 
