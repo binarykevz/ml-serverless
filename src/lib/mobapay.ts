@@ -1,13 +1,8 @@
 import type { IgnResult } from '../types';
 
-/**
- * Fetches IGN using the Mobapay App Shop API.
- * Specifically targets data.user_info.user_name for reliability.
- */
 export async function fetchIGN(gameId: string, serverId: string): Promise<IgnResult> {
   const baseUrl = 'https://api.mobapay.com/api/app_shop';
   
-  // Construct URL exactly as per your curl command
   const params = new URLSearchParams({
     app_id: '100000',
     game_user_key: gameId,
@@ -22,7 +17,6 @@ export async function fetchIGN(gameId: string, serverId: string): Promise<IgnRes
 
   const url = `${baseUrl}?${params.toString()}`;
 
-  // Exact headers from your provided curl command
   const headers: Record<string, string> = {
     'accept': 'application/json, text/plain, */*',
     'accept-language': 'en-US,en;q=0.6',
@@ -47,7 +41,7 @@ export async function fetchIGN(gameId: string, serverId: string): Promise<IgnRes
     const response = await fetch(url, {
       method: 'GET',
       headers,
-      signal: AbortSignal.timeout(10000), // 10s timeout
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
@@ -56,30 +50,17 @@ export async function fetchIGN(gameId: string, serverId: string): Promise<IgnRes
 
     const rawData = await response.json();
 
-    // 1. Check for API-level errors first (e.g., invalid ID)
     if (rawData.code && rawData.code !== 0 && rawData.code !== "0") {
-       return { 
-         success: false, 
-         error: `API Error (${rawData.code}): ${rawData.msg || 'Unknown error'}` 
-       };
+       return { success: false, error: `API Error (${rawData.code}): ${rawData.msg || 'Unknown error'}` };
     }
 
-    // 2. Directly parse the expected structure: data.user_info.user_name
     let userName: string | null = null;
     
-    // Safety check to ensure nested objects exist before accessing properties
-    if (rawData.data && 
-        rawData.data.user_info && 
-        typeof rawData.data.user_info === 'object') {
-      
+    if (rawData.data && rawData.data.user_info && typeof rawData.data.user_info === 'object') {
       const userInfo = rawData.data.user_info;
-      
-      // Prioritize user_name as requested
       if (userInfo.user_name && typeof userInfo.user_name === 'string') {
         userName = userInfo.user_name.trim();
-      } 
-      // Fallback just in case key varies slightly (optional but recommended)
-      else if (userInfo.username && typeof userInfo.username === 'string') {
+      } else if (userInfo.username && typeof userInfo.username === 'string') {
         userName = userInfo.username.trim();
       }
     }
@@ -87,19 +68,11 @@ export async function fetchIGN(gameId: string, serverId: string): Promise<IgnRes
     if (userName) {
       return { success: true, name: userName };
     } else {
-      // Detailed error message showing what WAS found, helping you debug if structure changes
-      const hasData = !!rawData.data;
-      const hasUserInfo = !!(rawData.data && rawData.data.user_info);
-      const userInfoKeys = hasUserInfo ? Object.keys(rawData.data.user_info).join(', ') : 'none';
-      
-      return { 
-        success: false, 
-        error: `Username not found at data.user_info.user_name. Has Data: ${hasData}, Has User Info: ${hasUserInfo}. Keys found: [${userInfoKeys}]` 
-      };
+      return { success: false, error: "Username not found in API response" };
     }
     
   } catch (error: any) {
-    console.error('Error fetching IGN from Mobapay:', error.message);
+    console.error('Error fetching IGN:', error.message);
     return { success: false, error: error.message };
   }
 }
