@@ -1,5 +1,6 @@
+import type { Context } from 'grammy';
 import type { Env } from '../types';
-import { sendMessage, escapeMarkdown } from './telegram';
+import { escapeMarkdown } from './telegram'; // Keep this helper or move inside
 import { 
   upsertUser, 
   getActivePendingByTelegramId, 
@@ -7,8 +8,8 @@ import {
   createPendingRequest 
 } from './db';
 
-const PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const AUTO_COOLDOWN_MS = 60 * 1000; // 1 minute
+const PENDING_TTL_MS = 10 * 60 * 1000;
+const AUTO_COOLDOWN_MS = 60 * 1000;
 
 const BLOCKING_VC_CODES = new Set(['-20023', '-20024', '-20025', '-20027', '9601']);
 
@@ -63,70 +64,75 @@ async function callSendMail(gameId: string, serverId: string) {
   }
 }
 
-export async function requestAndSendPendingVC(params: {
-  env: Env;
-  botSendMessage: typeof sendMessage;
-  chatId: number;
+/**
+ * Refactored to use Grammy Context
+ */
+export async function requestAndSendPendingVC(ctx: Context<Env>, params: {
   telegramId: string;
-  telegramUsername?: string | null;
   gameId: string;
   serverId: string;
   ign: string;
   source?: "manual" | "auto";
 }) {
-  const { env, botSendMessage, chatId, telegramId, telegramUsername, gameId, serverId, ign, source = "manual" } = params;
+  const { telegramId, gameId, serverId, ign, source = "manual" } = params;
+  const env = ctx.env;
   const now = Date.now();
 
   try {
+    // Check Active Pending
     const active = await getActivePendingByTelegramId(env, telegramId);
     if (active) {
       const expiresUnix = Math.floor(Number(active.expires_at) / 1000);
-      await botSendMessage(env, chatId, 
+      await ctx.reply(
         `⏳ You already have a pending verification code request.\n\n` +
         `👉 Reply to message ID \`${active.bot_message_id}\` with the code.\n` +
         `🆔 Game ID: \`${active.game_id}\`\n` +
         `🔰 Server ID: \`${active.server_id}\`\n` +
-        `⏳ Expires: <t:${expiresUnix}:R>`
+        `⏳ Expires: <t:${expiresUnix}:R>`,
+        { parse_mode: 'Markdown' }
       );
       return { requested: false, reason: "active_pending", pending: active };
     }
 
+    // Cooldown Check
     if (source === "auto") {
       const recentAuto = await getRecentAutoPending(env, telegramId, now - AUTO_COOLDOWN_MS);
       if (recentAuto) {
         const retryUnix = Math.floor((Number(recentAuto.created_at) + AUTO_COOLDOWN_MS) / 1000);
-        await botSendMessage(env, chatId, 
+        await ctx.reply(
           `⏳ An automatic new verification code was requested recently.\n\n` +
           `Please wait before requesting another one.\n` +
-          `🕒 Try again: <t:${retryUnix}:R>`
+          `🕒 Try again: <t:${retryUnix}:R>`,
+          { parse_mode: 'Markdown' }
         );
         return { requested: false, reason: "cooldown", pending: recentAuto };
       }
     }
 
+    // Call API
     const { apiData, error } = await callSendMail(gameId, serverId);
     if (error) {
-      await botSendMessage(env, chatId, 
-        `❌ Failed to request verification code.\nReason: ${escapeMarkdown(error)}`
-      );
+      await ctx.reply(`❌ Failed to request verification code.\nReason: ${escapeMarkdown(error)}`, { parse_mode: 'Markdown' });
       return { requested: false, error };
     }
 
     const parsed = parseSendVcResponse(apiData);
 
     if (BLOCKING_VC_CODES.has(parsed.respcode)) {
-      await botSendMessage(env, chatId, 
+      await ctx.reply(
         `❌ Verification code request failed.\n\n` +
         `🆔 Game ID: \`${gameId}\`\n` +
         `🔰 Server ID: \`${serverId}\`\n` +
-        `📧 Message: ${escapeMarkdown(parsed.message)}`
+        `📧 Message: ${escapeMarkdown(parsed.message)}`,
+        { parse_mode: 'Markdown' }
       );
       return { requested: false, error: parsed.message, apiData, parsed };
     }
 
+    // Update User State
     await upsertUser(env, {
       telegramId,
-      telegramUsername,
+      telegramUsername: ctx.from?.username || null,
       gameId,
       serverId,
       ign,
@@ -149,17 +155,19 @@ export async function requestAndSendPendingVC(params: {
       `🔐 Only Telegram user ID \`${telegramId}\` can submit this code.\n` +
       `⏳ Expires: <t:${expiresUnix}:R>`;
 
-    const sentRes = await botSendMessage(env, chatId, pendingText);
-    const botMessageId = sentRes.result?.message_id;
+    // Send Message & Get ID
+    const sentMsg = await ctx.reply(pendingText, { parse_mode: 'Markdown' });
+    const botMessageId = sentMsg.message_id;
 
     if (!botMessageId) {
       return { requested: false, error: "Could not get Telegram message ID." };
     }
 
+    // Save Pending State
     try {
       await createPendingRequest(env, {
         telegramId,
-        chatId: String(chatId),
+        chatId: String(ctx.chat.id),
         gameId,
         serverId,
         ign,
@@ -168,10 +176,7 @@ export async function requestAndSendPendingVC(params: {
         expiresAt,
       });
     } catch (dbError: any) {
-      await botSendMessage(env, chatId, 
-        `⚠️ Verification code was requested, but saving the pending request failed.\n` +
-        `Reason: ${escapeMarkdown(dbError.message)}`
-      );
+      await ctx.reply(`⚠️ Verification code was requested, but saving the pending request failed.\nReason: ${escapeMarkdown(dbError.message)}`, { parse_mode: 'Markdown' });
       return { requested: false, error: dbError.message };
     }
 
@@ -179,9 +184,7 @@ export async function requestAndSendPendingVC(params: {
 
   } catch (error: any) {
     console.error("❌ [VC] requestAndSendPendingVC error:", error);
-    await botSendMessage(env, chatId, 
-      `❌ Unexpected verification code request error: ${escapeMarkdown(error.message)}`
-    ).catch(() => {});
+    await ctx.reply(`❌ Unexpected verification code request error: ${escapeMarkdown(error.message)}`).catch(() => {});
     return { requested: false, error: error.message };
   }
 }
