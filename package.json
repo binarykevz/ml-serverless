@@ -1,0 +1,36 @@
+{
+  "name": "ml-serverless-telegram-bot",
+  "version": "1.0.0",
+  "description": "Serverless Mobile Legends Telegram Bot using Cloudflare Workers, Hono, Grammy, and Turso",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "build": "tsc",
+    "deploy": "npm run build && wrangler deploy",
+    "tail": "wrangler tail",
+    "db:create": "wrangler d1 create ml_bot_db",
+    "db:migrate": "wrangler d1 execute ml_bot_db --file=./schema.sql --remote"
+  },
+  "keywords": [
+    "mobile-legends",
+    "telegram-bot",
+    "cloudflare-workers",
+    "serverless",
+    "turso",
+    "grammy",
+    "hono"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "grammy": "^1.30.0",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240925.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^3.80.0"
+  }
+}
