@@ -48,7 +48,8 @@ export async function fetchIGN(gameId: string, serverId: string): Promise<IgnRes
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
-    const rawData = await response.json();
+    // FIX: Cast to any to handle unknown type from json()
+    const rawData = await response.json() as any;
 
     if (rawData.code && rawData.code !== 0 && rawData.code !== "0") {
        return { success: false, error: `API Error (${rawData.code}): ${rawData.msg || 'Unknown error'}` };
