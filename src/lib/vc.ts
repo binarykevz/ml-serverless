@@ -26,7 +26,6 @@ const responseMessages: Record<string, string> = {
 function parseSendVcResponse(apiData: any) {
   const respcode = apiData?.code?.toString() ?? "UNKNOWN";
   const stat = apiData?.status;
-
   let message = responseMessages[respcode];
   if (!message) {
     const apiMsg = apiData?.msg || apiData?.message;
@@ -36,7 +35,6 @@ function parseSendVcResponse(apiData: any) {
       message = `Unknown code: ${respcode}`;
     }
   }
-
   return { respcode, stat, message };
 }
 
@@ -56,7 +54,6 @@ async function callSendMail(gameId: string, serverId: string) {
       }),
       signal: AbortSignal.timeout(15000),
     });
-
     const data = await response.json();
     return { apiData: data, error: null };
   } catch (error: any) {
@@ -81,7 +78,6 @@ export async function requestAndSendPendingVC(params: {
   const now = Date.now();
 
   try {
-    // 1. Check existing pending
     const active = await getActivePendingByTelegramId(env, telegramId);
     if (active) {
       const expiresUnix = Math.floor(Number(active.expires_at) / 1000);
@@ -95,7 +91,6 @@ export async function requestAndSendPendingVC(params: {
       return { requested: false, reason: "active_pending", pending: active };
     }
 
-    // 2. Cooldown check for auto
     if (source === "auto") {
       const recentAuto = await getRecentAutoPending(env, telegramId, now - AUTO_COOLDOWN_MS);
       if (recentAuto) {
@@ -109,7 +104,6 @@ export async function requestAndSendPendingVC(params: {
       }
     }
 
-    // 3. Call API
     const { apiData, error } = await callSendMail(gameId, serverId);
     if (error) {
       await botSendMessage(env, chatId, 
@@ -130,7 +124,6 @@ export async function requestAndSendPendingVC(params: {
       return { requested: false, error: parsed.message, apiData, parsed };
     }
 
-    // 4. Update User State
     await upsertUser(env, {
       telegramId,
       telegramUsername,
@@ -142,7 +135,6 @@ export async function requestAndSendPendingVC(params: {
       vcMessage: parsed.message,
     });
 
-    // 5. Send Telegram Message asking for Reply
     const expiresAt = now + PENDING_TTL_MS;
     const expiresUnix = Math.floor(expiresAt / 1000);
 
@@ -164,7 +156,6 @@ export async function requestAndSendPendingVC(params: {
       return { requested: false, error: "Could not get Telegram message ID." };
     }
 
-    // 6. Save Pending State to DB
     try {
       await createPendingRequest(env, {
         telegramId,
