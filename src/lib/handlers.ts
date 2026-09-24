@@ -1,5 +1,5 @@
-import type { Env, TelegramMessage } from '../types';
-import { sendMessage, escapeMarkdown, sendChatAction, deleteMessage } from './telegram';
+import type { Context } from 'grammy';
+import type { Env } from '../types';
 import { fetchIGN } from './mobapay';
 import { 
   getUser, 
@@ -14,9 +14,42 @@ import {
 } from './db';
 import { requestAndSendPendingVC } from './vc';
 
+// Helper for markdown escaping
+function escapeMarkdown(text: string): string {
+  if (!text) return '';
+  return String(text).replace(/[_*`[\]]/g, '\\$&');
+}
+
 const USAGE_SENDVC = "❌ Invalid Use Of Command!\n💡 Usage: `/sendvc [GameID] [ServerID]`\nExample: `/sendvc 12345678 1234`\nOr use `/link` first.";
 const USAGE_CLAIM = "❌ Invalid Use Of Command!\n💡 Full usage: `/claim [GameID] [ServerID] [VCode]`\n💡 Linked usage: `/claim [VCode]`\n💡 Saved usage: `/claim`\n⚠️ Must reply to a CDK message.";
 const USAGE_LINK = "❌ Invalid Use Of Command!\n💡 Usage: `/link [GameID] [ServerID]`\n\n⚠️ You can only link ONE account at a time.\nUse `/unlink` first if you want to change accounts.";
+
+// ✅ UPDATED: Comprehensive Response Messages Map
+const responseMessages: Record<string, string> = {
+    "-20023": "Invalid Game ID",
+    "-20024": "Invalid Server ID",
+    "-20025": "Game ID and Server ID do not match",
+    "-20027": "Request too Frequent!...",
+    "-20010": "Invalid Verification Code!",
+    "0": "Redeemed Successfully!",
+    "1401": "redeem in specified zone",
+    "1402": "This CDKey does not exist",
+    "1403": "CDKey expired",
+    "1404": "Incorrect format of CDKey",
+    "1405": "This CDKey has been redeemed.",
+    "1406": "Bound Account CDKey. Incorrect account.",
+    "1407": "Exceeds exchange amount limit.",
+    "1408": "Can only redeem in specified zone.",
+    "1409": "Restriction Requirement Configuration Error",
+    "1410": "This CDKey is being redeemed by many players. The Server is processing... Please try again later.",
+    "1411": "It's not exchange time, please wait.",
+    "1412": "Limit reached for number of people exchanging.",
+    "1413": "You are not a new user",
+    "1414": "You haven't purchased yet",
+    "1415": "Your level is too high",
+    "1416": "You can not redeem the CDKey through your channel",
+    "1036": "The amount limitation of CDKey redeemption"
+};
 
 function isVcExhausted(respcode: string, apiData: any, message: string, env: Env): boolean {
   const configuredCodes = (env.VC_EXHAUSTED_CODES || "").split(",").map(s => s.trim()).filter(Boolean);
@@ -34,7 +67,7 @@ function isVcExhausted(respcode: string, apiData: any, message: string, env: Env
   return texts.some(t => haystack.includes(t));
 }
 
-export async function handleStart(env: Env, msg: TelegramMessage) {
+export async function handleStart(ctx: Context<Env>) {
   const helpText = [
     "🤖 *Mobile Legends Serverless Bot*",
     "",
@@ -56,43 +89,44 @@ export async function handleStart(env: Env, msg: TelegramMessage) {
     "4. Send CDK & Reply with `/claim`.",
   ].join("\n");
   
-  await sendMessage(env, msg.chat.id, helpText);
+  await ctx.reply(helpText, { parse_mode: 'Markdown' });
 }
 
-export async function handleHelp(env: Env, msg: TelegramMessage) {
-  await handleStart(env, msg);
+export async function handleHelp(ctx: Context<Env>) {
+  await handleStart(ctx);
 }
 
-export async function handleLink(env: Env, msg: TelegramMessage) {
-  const args = (msg.text || "").trim().split(/\s+/);
+export async function handleLink(ctx: Context<Env>) {
+  const args = (ctx.message?.text || "").trim().split(/\s+/);
   const gameid = args[1];
   const serverid = args[2];
-  const userId = String(msg.from?.id || msg.chat.id);
+  const userId = String(ctx.from?.id || ctx.chat.id);
 
   if (!gameid || !serverid || !/^\d+$/.test(gameid) || !/^\d+$/.test(serverid)) {
-    return sendMessage(env, msg.chat.id, USAGE_LINK);
+    return ctx.reply(USAGE_LINK, { parse_mode: 'Markdown' });
   }
 
-  const alreadyLinked = await isUserLinked(env, userId);
+  const alreadyLinked = await isUserLinked(ctx.env, userId);
   if (alreadyLinked) {
-    return sendMessage(env, msg.chat.id, 
+    return ctx.reply(
       "⚠️ You are already linked to an account.\n\n" +
       "To switch accounts, please use `/unlink` first.\n" +
-      "Check your current link with `/status`."
+      "Check your current link with `/status`.",
+      { parse_mode: 'Markdown' }
     );
   }
 
-  // Typing indicator for long operation
-  await sendChatAction(env, msg.chat.id, 'typing');
+  // Typing Indicator
+  await ctx.api.sendChatAction(ctx.chat.id, 'typing');
   
   const ignResult = await fetchIGN(gameid, serverid);
   if (!ignResult.success || !ignResult.name) {
-    return sendMessage(env, msg.chat.id, `❌ Could not verify account: ${escapeMarkdown(ignResult.error || "Unknown")}`);
+    return ctx.reply(`❌ Could not verify account: ${escapeMarkdown(ignResult.error || "Unknown")}`, { parse_mode: 'Markdown' });
   }
 
-  await upsertUser(env, {
+  await upsertUser(ctx.env, {
     telegramId: userId,
-    telegramUsername: msg.from?.username || null,
+    telegramUsername: ctx.from?.username || null,
     gameId: gameid,
     serverId: serverid,
     ign: ignResult.name,
@@ -101,74 +135,72 @@ export async function handleLink(env: Env, msg: TelegramMessage) {
     vcMessage: "Linked",
   });
 
-  await sendMessage(env, msg.chat.id, 
+  await ctx.reply(
     `✅ Account linked successfully!\n\n` +
     `👤 IGN: *${escapeMarkdown(ignResult.name)}*\n` +
     `🆔 Game ID: \`${gameid}\`\n` +
     `🔰 Server ID: \`${serverid}\`\n\n` +
-    `You can now use \`/sendvc\` and \`/claim\`.`
+    `You can now use \`/sendvc\` and \`/claim\`.`,
+    { parse_mode: 'Markdown' }
   );
 }
 
-export async function handleUnlink(env: Env, msg: TelegramMessage) {
-  const userId = String(msg.from?.id || msg.chat.id);
+export async function handleUnlink(ctx: Context<Env>) {
+  const userId = String(ctx.from?.id || ctx.chat.id);
   
-  const row = await getUser(env, userId);
+  const row = await getUser(ctx.env, userId);
   
   if (!row || !row.game_id) {
-    return sendMessage(env, msg.chat.id, "ℹ️ No account is currently linked.");
+    return ctx.reply("ℹ️ No account is currently linked.");
   }
 
-  await deleteUser(env, userId);
-  await cancelActivePending(env, userId);
+  await deleteUser(ctx.env, userId);
+  await cancelActivePending(ctx.env, userId);
 
-  await sendMessage(env, msg.chat.id, 
+  await ctx.reply(
     `🗑 Unlinked successfully.\n\n` +
     `Previous Account:\n` +
     `🆔 Game ID: \`${row.game_id}\`\n` +
     `🔰 Server ID: \`${row.server_id}\`\n\n` +
-    `You can now use \`/link\` to connect a different account.`
+    `You can now use \`/link\` to connect a different account.`,
+    { parse_mode: 'Markdown' }
   );
 }
 
-export async function handleSendVC(env: Env, msg: TelegramMessage) {
-  const args = (msg.text || "").trim().split(/\s+/);
-  const userId = String(msg.from?.id || msg.chat.id);
+export async function handleSendVC(ctx: Context<Env>) {
+  const args = (ctx.message?.text || "").trim().split(/\s+/);
+  const userId = String(ctx.from?.id || ctx.chat.id);
   
   let gameid = args[1];
   let serverid = args[2];
 
   if (!gameid || !serverid) {
-    const saved = await getUser(env, userId);
+    const saved = await getUser(ctx.env, userId);
     if (saved && saved.game_id && saved.server_id) {
       gameid = saved.game_id;
       serverid = saved.server_id;
     } else {
-      return sendMessage(env, msg.chat.id, USAGE_SENDVC);
+      return ctx.reply(USAGE_SENDVC, { parse_mode: 'Markdown' });
     }
   }
 
   if (!/^\d+$/.test(gameid!) || !/^\d+$/.test(serverid!)) {
-     return sendMessage(env, msg.chat.id, "❌ IDs must be numbers.");
+     return ctx.reply("❌ IDs must be numbers.");
   }
 
-  const saved = await getUser(env, userId);
+  const saved = await getUser(ctx.env, userId);
   let ign = saved?.ign || "Unknown";
 
-  // Typing indicator
-  await sendChatAction(env, msg.chat.id, 'typing');
+  // Typing Indicator
+  await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 
   try {
     const ignResult = await fetchIGN(gameid!, serverid!);
     if (ignResult.success && ignResult.name) ign = ignResult.name;
   } catch(e) {}
 
-  await requestAndSendPendingVC({
-    env,
-    botSendMessage: sendMessage,
-    chatId: msg.chat.id,
+  await requestAndSendPendingVC(ctx, {
     telegramId: userId,
-    telegramUsername: msg.from?.username || null,
     gameId: gameid!,
     serverId: serverid!,
     ign,
@@ -176,21 +208,21 @@ export async function handleSendVC(env: Env, msg: TelegramMessage) {
   });
 }
 
-export async function handleClaim(env: Env, msg: TelegramMessage) {
-  const userId = String(msg.from?.id || msg.chat.id);
-  const args = (msg.text || "").trim().split(/\s+/);
-  const reply = msg.reply_to_message;
+export async function handleClaim(ctx: Context<Env>) {
+  const userId = String(ctx.from?.id || ctx.chat.id);
+  const args = (ctx.message?.text || "").trim().split(/\s+/);
+  const reply = ctx.message?.reply_to_message;
 
   if (!reply) {
-    return sendMessage(env, msg.chat.id, USAGE_CLAIM);
+    return ctx.reply(USAGE_CLAIM, { parse_mode: 'Markdown' });
   }
 
   const cdk = (reply.text || reply.caption || "").trim();
   if (!cdk) {
-    return sendMessage(env, msg.chat.id, "❌ The message you replied to is empty.");
+    return ctx.reply("❌ The message you replied to is empty.");
   }
 
-  const saved = await getUser(env, userId);
+  const saved = await getUser(ctx.env, userId);
   let gameid: string | undefined;
   let serverid: string | undefined;
   let vcode: string | undefined;
@@ -201,28 +233,28 @@ export async function handleClaim(env: Env, msg: TelegramMessage) {
     if (saved?.game_id && saved?.server_id) {
       gameid = saved.game_id; serverid = saved.server_id; vcode = args[1];
     } else {
-       return sendMessage(env, msg.chat.id, USAGE_CLAIM);
+       return ctx.reply(USAGE_CLAIM, { parse_mode: 'Markdown' });
     }
   } else {
     if (saved?.game_id && saved?.server_id) {
       gameid = saved.game_id; serverid = saved.server_id; vcode = saved.verification_code;
       if (!vcode) {
-         return sendMessage(env, msg.chat.id, "❌ No saved VC. Use `/sendvc` then reply with code.");
+         return ctx.reply("❌ No saved VC. Use `/sendvc` then reply with code.");
       }
     } else {
-       return sendMessage(env, msg.chat.id, USAGE_CLAIM);
+       return ctx.reply(USAGE_CLAIM, { parse_mode: 'Markdown' });
     }
   }
 
-  if (!gameid || !serverid || !vcode) return sendMessage(env, msg.chat.id, USAGE_CLAIM);
+  if (!gameid || !serverid || !vcode) return ctx.reply(USAGE_CLAIM, { parse_mode: 'Markdown' });
   if (!/^\d+$/.test(gameid) || !/^\d+$/.test(serverid) || !/^\d{4,8}$/.test(vcode)) {
-    return sendMessage(env, msg.chat.id, "❌ Invalid format.");
+    return ctx.reply("❌ Invalid format.");
   }
 
-  // Typing indicator
-  await sendChatAction(env, msg.chat.id, 'typing');
+  // Typing Indicator
+  await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 
-  await sendMessage(env, msg.chat.id, `🔁 Checking Account...\n🆔 \`${gameid}\`\n🔰 \`${serverid}\``);
+  await ctx.reply(`🔁 Checking Account...\n🆔 \`${gameid}\`\n🔰 \`${serverid}\``, { parse_mode: 'Markdown' });
 
   let ign = saved?.ign || null;
   let ignError = null;
@@ -236,18 +268,18 @@ export async function handleClaim(env: Env, msg: TelegramMessage) {
   }
 
   if (!ign) {
-    await insertClaimLog(env, {
+    await insertClaimLog(ctx.env, {
       telegramId: userId,
-      telegramUsername: msg.from?.username || null,
+      telegramUsername: ctx.from?.username || null,
       gameId: gameid, serverId: serverid,
       ign: "Unknown", cdk, vcode,
       status: "IGN_FAILED",
       message: String(ignError || "IGN not found"),
     });
-    return sendMessage(env, msg.chat.id, `❌ Invalid Game ID or Server ID!\nReason: ${escapeMarkdown(String(ignError))}`);
+    return ctx.reply(`❌ Invalid Game ID or Server ID!\nReason: ${escapeMarkdown(String(ignError))}`, { parse_mode: 'Markdown' });
   }
 
-  await sendMessage(env, msg.chat.id, `✅ Found IGN: *${escapeMarkdown(ign)}*\n🔁 Trying to Redeem CDK...`);
+  await ctx.reply(`✅ Found IGN: *${escapeMarkdown(ign)}*\n🔁 Trying to Redeem CDK...`, { parse_mode: 'Markdown' });
 
   let apiData: any = null;
   let apiError: string | null = null;
@@ -275,41 +307,39 @@ export async function handleClaim(env: Env, msg: TelegramMessage) {
   }
 
   if (apiError) {
-    await insertClaimLog(env, {
+    await insertClaimLog(ctx.env, {
       telegramId: userId,
-      telegramUsername: msg.from?.username || null,
+      telegramUsername: ctx.from?.username || null,
       gameId: gameid, serverId: serverid,
       ign, cdk, vcode,
       status: "ERROR",
       message: String(apiError),
     });
-    return sendMessage(env, msg.chat.id, `❌ Error: ${escapeMarkdown(String(apiError))}`);
+    return ctx.reply(`❌ Error: ${escapeMarkdown(String(apiError))}`, { parse_mode: 'Markdown' });
   }
 
   const respcode = apiData?.code?.toString() ?? "UNKNOWN";
   const stat = apiData?.status;
   
-  const messageMap: Record<string, string> = {
-    "0": "Redeemed Successfully!",
-    "-20023": "Invalid Game ID",
-    "-20024": "Invalid Server ID",
-    "-20025": "Mismatch",
-    "-20027": "Too Frequent",
-    "-20010": "Invalid VC",
-    "1405": "Already Redeemed",
-  };
-  let message = messageMap[respcode] || apiData?.msg || apiData?.message || `Code: ${respcode}`;
+  // ✅ USE THE COMPREHENSIVE MAP HERE
+  let message = responseMessages[respcode];
 
-  const exhausted = isVcExhausted(respcode, apiData, message, env);
+  // Fallback if code is not in map but API returned a message
+  if (!message) {
+    const apiMsg = apiData?.msg || apiData?.message;
+    if (apiMsg && String(apiMsg) !== respcode) {
+      message = String(apiMsg);
+    } else {
+      message = `Unknown code: ${respcode}`;
+    }
+  }
+
+  const exhausted = isVcExhausted(respcode, apiData, message, ctx.env);
   let autoNote = "";
 
   if (exhausted) {
-    const autoResult = await requestAndSendPendingVC({
-      env,
-      botSendMessage: sendMessage,
-      chatId: msg.chat.id,
+    const autoResult = await requestAndSendPendingVC(ctx, {
       telegramId: userId,
-      telegramUsername: msg.from?.username || null,
       gameId: gameid,
       serverId: serverid,
       ign,
@@ -329,9 +359,9 @@ export async function handleClaim(env: Env, msg: TelegramMessage) {
 
   const logMessage = String(message) + (exhausted ? " | Auto-VC triggered" : "");
 
-  await insertClaimLog(env, {
+  await insertClaimLog(ctx.env, {
     telegramId: userId,
-    telegramUsername: msg.from?.username || null,
+    telegramUsername: ctx.from?.username || null,
     gameId: gameid, serverId: serverid,
     ign, cdk, vcode,
     status: String(stat ?? ""),
@@ -348,19 +378,19 @@ export async function handleClaim(env: Env, msg: TelegramMessage) {
     autoNote +
     `\n\n🧾 Claim attempt saved to Turso/D1.`;
 
-  await sendMessage(env, msg.chat.id, resultMsg);
+  await ctx.reply(resultMsg, { parse_mode: 'Markdown' });
 }
 
-export async function handleStatus(env: Env, msg: TelegramMessage) {
-  const userId = String(msg.from?.id || msg.chat.id);
-  const row = await getUser(env, userId);
+export async function handleStatus(ctx: Context<Env>) {
+  const userId = String(ctx.from?.id || ctx.chat.id);
+  const row = await getUser(ctx.env, userId);
 
   if (!row) {
-    return sendMessage(env, msg.chat.id, "❌ No linked account. Use `/link [GameID] [ServerID]`.");
+    return ctx.reply("❌ No linked account. Use `/link [GameID] [ServerID]`.", { parse_mode: 'Markdown' });
   }
 
   const updatedAt = row.updated_at ? new Date(Number(row.updated_at)).toISOString() : "N/A";
-  const latestClaim = await getLatestClaimLog(env, userId);
+  const latestClaim = await getLatestClaimLog(ctx.env, userId);
   
   let claimSection = "";
   if (latestClaim) {
@@ -368,7 +398,7 @@ export async function handleStatus(env: Env, msg: TelegramMessage) {
     claimSection = `\n\n🎁 *Last Claim*\n💠 Status: ${escapeMarkdown(latestClaim.status || "N/A")}\n📧 Msg: ${escapeMarkdown(latestClaim.message || "N/A")}\n🕒 Time: \`${claimTime}\``;
   }
 
-  await sendMessage(env, msg.chat.id, 
+  await ctx.reply(
     `📦 *Saved Info*\n\n` +
     `🆔 Game ID: \`${row.game_id || "Not set"}\`\n` +
     `🔰 Server ID: \`${row.server_id || "Not set"}\`\n` +
@@ -376,55 +406,56 @@ export async function handleStatus(env: Env, msg: TelegramMessage) {
     `🧾 VC: \`${row.verification_code || "None"}\`\n` +
     `💠 VC Status: \`${row.vc_status || "None"}\`\n` +
     `🕒 Updated: \`${updatedAt}\`` +
-    claimSection
+    claimSection,
+    { parse_mode: 'Markdown' }
   );
 }
 
-export async function handleCancel(env: Env, msg: TelegramMessage) {
-  const userId = String(msg.from?.id || msg.chat.id);
-  await cancelActivePending(env, userId);
-  await sendMessage(env, msg.chat.id, "🚫 Pending verification request cancelled.");
+export async function handleCancel(ctx: Context<Env>) {
+  const userId = String(ctx.from?.id || ctx.chat.id);
+  await cancelActivePending(ctx.env, userId);
+  await ctx.reply("🚫 Pending verification request cancelled.");
 }
 
-export async function handleClear(env: Env, msg: TelegramMessage) {
-  const userId = String(msg.from?.id || msg.chat.id);
-  await deleteUser(env, userId);
-  await cancelActivePending(env, userId);
-  await sendMessage(env, msg.chat.id, "🗑 All data cleared. Use `/link` to start over.");
+export async function handleClear(ctx: Context<Env>) {
+  const userId = String(ctx.from?.id || ctx.chat.id);
+  await deleteUser(ctx.env, userId);
+  await cancelActivePending(ctx.env, userId);
+  await ctx.reply("🗑 All data cleared. Use `/link` to start over.");
 }
 
-// UPDATED REPLY HANDLER WITH AUTO-DELETE
-export async function handlePendingCodeReply(env: Env, msg: TelegramMessage): Promise<boolean> {
-  if (!msg.reply_to_message) return false;
+// UPDATED REPLY HANDLER WITH AUTO-DELETE USING GRAMMY
+export async function handlePendingCodeReply(ctx: Context<Env>): Promise<boolean> {
+  if (!ctx.message?.reply_to_message) return false;
 
-  const replyMessageId = msg.reply_to_message.message_id;
-  const pending = await getPendingByBotMessageId(env, replyMessageId);
+  const replyMessageId = ctx.message.reply_to_message.message_id;
+  const pending = await getPendingByBotMessageId(ctx.env, replyMessageId);
 
   if (!pending) return false;
 
-  const userId = String(msg.from?.id ?? "");
-  const chatId = String(msg.chat.id);
+  const userId = String(ctx.from?.id ?? "");
+  const chatId = String(ctx.chat.id);
 
   if (userId !== String(pending.telegram_id)) return true;
   if (chatId !== String(pending.chat_id)) return true;
   if (pending.status !== "pending") return true;
   if (Number(pending.expires_at) <= Date.now()) {
-    await sendMessage(env, msg.chat.id, `⏰ Expired. Use \`/sendvc\` again.`);
+    await ctx.reply(`⏰ Expired. Use \`/sendvc\` again.`);
     return true;
   }
 
-  const code = String(msg.text || "").trim();
+  const code = String(ctx.message.text || "").trim();
   if (!/^\d{4,8}$/.test(code)) {
-    await sendMessage(env, msg.chat.id, `❌ Invalid format. Expected 4-8 digits.`);
+    await ctx.reply(`❌ Invalid format. Expected 4-8 digits.`);
     return true;
   }
 
   try {
-    await completePendingRequest(env, pending.id, code);
+    await completePendingRequest(ctx.env, pending.id, code);
     
-    await upsertUser(env, {
+    await upsertUser(ctx.env, {
       telegramId: pending.telegram_id,
-      telegramUsername: msg.from?.username || null,
+      telegramUsername: ctx.from?.username || null,
       gameId: pending.game_id,
       serverId: pending.server_id,
       ign: pending.ign,
@@ -433,22 +464,22 @@ export async function handlePendingCodeReply(env: Env, msg: TelegramMessage): Pr
       vcMessage: "Saved from reply",
     });
 
-    await sendMessage(env, msg.chat.id, 
+    await ctx.reply(
       `✅ Verification code saved.\n\n` +
       `🆔 Game ID: \`${pending.game_id}\`\n` +
       `🔰 Server ID: \`${pending.server_id}\`\n` +
       `🧾 Code: \`${code}\`\n\n` +
-      `Now reply to a CDK message and send:\n\`/claim\``
+      `Now reply to a CDK message and send:\n\`/claim\``,
+      { parse_mode: 'Markdown' }
     );
 
     // AUTO-DELETE THE ORIGINAL PROMPT MESSAGE
-    // We delete the message the user replied TO (the bot's prompt)
-    await deleteMessage(env, chatId, replyMessageId);
+    await ctx.deleteMessage(replyMessageId);
 
     return true;
   } catch (error: any) {
     console.error("Save Fail:", error);
-    await sendMessage(env, msg.chat.id, `❌ Failed to save: ${error.message}`);
+    await ctx.reply(`❌ Failed to save: ${error.message}`);
     return true;
   }
 }
