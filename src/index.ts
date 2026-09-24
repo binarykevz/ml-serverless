@@ -15,27 +15,9 @@ import {
 } from './lib/handlers';
 
 const app = new Hono<{ Bindings: Env }>();
-  // Initialize Bot WITHOUT auto-init
-  const bot = new Bot(env.TELEGRAM_BOT_TOKEN, {
-    botInfo: {
-      id: 0,
-      is_bot: true,
-      first_name: "Truffle Bot",
-      username: "itskevz_bot",
-      can_join_groups: true,
-      can_read_all_group_messages: false,
-      supports_inline_queries: false,
-      // Add these missing fields required by newer Grammy types
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-      can_manage_bots: false, 
-      // If there are more errors, you can use 'as any' below instead
-    } as any 
-  });
 
 app.post('/', async (c) => {
+  // 1. Get env from Hono Context
   const env = c.env;
   
   // Verify Secret Token
@@ -51,18 +33,24 @@ app.post('/', async (c) => {
     return c.text('Bad Request', 400);
   }
 
-  // Initialize Bot WITHOUT auto-init to prevent "Bot not initialized" errors
-  // We pass an empty object or null to skip the getMe call
+  // 2. Initialize Bot with Dummy Info to skip network call
+  // We cast the entire options object to 'any' to bypass strict UserFromGetMe typing
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN, {
     botInfo: {
-      id: 0, // Dummy ID
+      id: 0,
       is_bot: true,
       first_name: "ML Bot",
-      username: "ml_telegram_bot", // Dummy username
+      username: "ml_telegram_bot",
       can_join_groups: true,
       can_read_all_group_messages: false,
       supports_inline_queries: false,
-    }
+      // These fields are required by newer Grammy types but we don't need real values
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+      can_manage_bots: false,
+    } as any // <--- This casts the object literal to any, satisfying TS
   });
 
   bot.catch(async (err) => {
