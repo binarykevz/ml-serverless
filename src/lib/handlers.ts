@@ -1,5 +1,5 @@
-// src/lib/handlers.ts
-import type { MyContext } from '../types'; // Use custom context
+import type { Context } from 'grammy';
+import type { Env } from '../types';
 import { fetchIGN } from './mobapay';
 import { 
   getUser, 
@@ -13,6 +13,9 @@ import {
   isUserLinked
 } from './db';
 import { requestAndSendPendingVC } from './vc';
+
+// Helper type for handlers
+type MyCtx = Context & { env: Env };
 
 function escapeMarkdown(text: string): string {
   if (!text) return '';
@@ -49,7 +52,7 @@ const responseMessages: Record<string, string> = {
     "1036": "The amount limitation of CDKey redeemption"
 };
 
-function isVcExhausted(respcode: string, apiData: any, message: string, ctx: MyContext): boolean {
+function isVcExhausted(respcode: string, apiData: any, message: string, ctx: MyCtx): boolean {
   const configuredCodes = (ctx.env.VC_EXHAUSTED_CODES || "").split(",").map(s => s.trim()).filter(Boolean);
   if (configuredCodes.includes(String(respcode))) return true;
 
@@ -65,7 +68,7 @@ function isVcExhausted(respcode: string, apiData: any, message: string, ctx: MyC
   return texts.some(t => haystack.includes(t));
 }
 
-export async function handleStart(ctx: MyContext) {
+export async function handleStart(ctx: MyCtx) {
   const helpText = [
     "🤖 *Mobile Legends Serverless Bot*",
     "",
@@ -90,15 +93,16 @@ export async function handleStart(ctx: MyContext) {
   await ctx.reply(helpText, { parse_mode: 'Markdown' });
 }
 
-export async function handleHelp(ctx: MyContext) {
+export async function handleHelp(ctx: MyCtx) {
   await handleStart(ctx);
 }
 
-export async function handleLink(ctx: MyContext) {
+export async function handleLink(ctx: MyCtx) {
   const args = (ctx.message?.text || "").trim().split(/\s+/);
   const gameid = args[1];
   const serverid = args[2];
-  const userId = String(ctx.from?.id || ctx.chat.id);
+  // FIX: Safe access
+  const userId = String(ctx.from?.id || ctx.chat?.id); 
 
   if (!gameid || !serverid || !/^\d+$/.test(gameid) || !/^\d+$/.test(serverid)) {
     return ctx.reply(USAGE_LINK, { parse_mode: 'Markdown' });
@@ -114,6 +118,9 @@ export async function handleLink(ctx: MyContext) {
     );
   }
 
+  // FIX: Safe access
+  if (!ctx.chat) return; 
+  
   await ctx.api.sendChatAction(ctx.chat.id, 'typing');
   
   const ignResult = await fetchIGN(gameid, serverid);
@@ -142,8 +149,8 @@ export async function handleLink(ctx: MyContext) {
   );
 }
 
-export async function handleUnlink(ctx: MyContext) {
-  const userId = String(ctx.from?.id || ctx.chat.id);
+export async function handleUnlink(ctx: MyCtx) {
+  const userId = String(ctx.from?.id || ctx.chat?.id);
   
   const row = await getUser(ctx.env, userId);
   
@@ -164,9 +171,9 @@ export async function handleUnlink(ctx: MyContext) {
   );
 }
 
-export async function handleSendVC(ctx: MyContext) {
+export async function handleSendVC(ctx: MyCtx) {
   const args = (ctx.message?.text || "").trim().split(/\s+/);
-  const userId = String(ctx.from?.id || ctx.chat.id);
+  const userId = String(ctx.from?.id || ctx.chat?.id);
   
   let gameid = args[1];
   let serverid = args[2];
@@ -188,6 +195,7 @@ export async function handleSendVC(ctx: MyContext) {
   const saved = await getUser(ctx.env, userId);
   let ign = saved?.ign || "Unknown";
 
+  if (!ctx.chat) return;
   await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 
   try {
@@ -204,8 +212,8 @@ export async function handleSendVC(ctx: MyContext) {
   });
 }
 
-export async function handleClaim(ctx: MyContext) {
-  const userId = String(ctx.from?.id || ctx.chat.id);
+export async function handleClaim(ctx: MyCtx) {
+  const userId = String(ctx.from?.id || ctx.chat?.id);
   const args = (ctx.message?.text || "").trim().split(/\s+/);
   const reply = ctx.message?.reply_to_message;
 
@@ -247,6 +255,7 @@ export async function handleClaim(ctx: MyContext) {
     return ctx.reply("❌ Invalid format.");
   }
 
+  if (!ctx.chat) return;
   await ctx.api.sendChatAction(ctx.chat.id, 'typing');
 
   await ctx.reply(`🔁 Checking Account...\n🆔 \`${gameid}\`\n🔰 \`${serverid}\``, { parse_mode: 'Markdown' });
@@ -297,7 +306,6 @@ export async function handleClaim(ctx: MyContext) {
       signal: AbortSignal.timeout(15000),
     });
     
-    // Cast to any to avoid unknown type errors
     apiData = await response.json() as any;
   } catch (error: any) {
     apiError = error.response?.data?.msg || error.response?.data?.message || error.message;
@@ -376,8 +384,8 @@ export async function handleClaim(ctx: MyContext) {
   await ctx.reply(resultMsg, { parse_mode: 'Markdown' });
 }
 
-export async function handleStatus(ctx: MyContext) {
-  const userId = String(ctx.from?.id || ctx.chat.id);
+export async function handleStatus(ctx: MyCtx) {
+  const userId = String(ctx.from?.id || ctx.chat?.id);
   const row = await getUser(ctx.env, userId);
 
   if (!row) {
@@ -406,20 +414,20 @@ export async function handleStatus(ctx: MyContext) {
   );
 }
 
-export async function handleCancel(ctx: MyContext) {
-  const userId = String(ctx.from?.id || ctx.chat.id);
+export async function handleCancel(ctx: MyCtx) {
+  const userId = String(ctx.from?.id || ctx.chat?.id);
   await cancelActivePending(ctx.env, userId);
   await ctx.reply("🚫 Pending verification request cancelled.");
 }
 
-export async function handleClear(ctx: MyContext) {
-  const userId = String(ctx.from?.id || ctx.chat.id);
+export async function handleClear(ctx: MyCtx) {
+  const userId = String(ctx.from?.id || ctx.chat?.id);
   await deleteUser(ctx.env, userId);
   await cancelActivePending(ctx.env, userId);
   await ctx.reply("🗑 All data cleared. Use `/link` to start over.");
 }
 
-export async function handlePendingCodeReply(ctx: MyContext): Promise<boolean> {
+export async function handlePendingCodeReply(ctx: MyCtx): Promise<boolean> {
   if (!ctx.message?.reply_to_message) return false;
 
   const replyMessageId = ctx.message.reply_to_message.message_id;
@@ -428,7 +436,8 @@ export async function handlePendingCodeReply(ctx: MyContext): Promise<boolean> {
   if (!pending) return false;
 
   const userId = String(ctx.from?.id ?? "");
-  const chatId = String(ctx.chat.id);
+  // FIX: Safe access
+  const chatId = String(ctx.chat?.id ?? "");
 
   if (userId !== String(pending.telegram_id)) return true;
   if (chatId !== String(pending.chat_id)) return true;
@@ -467,6 +476,7 @@ export async function handlePendingCodeReply(ctx: MyContext): Promise<boolean> {
       { parse_mode: 'Markdown' }
     );
 
+    // FIX: deleteMessage takes messageId, not AbortSignal
     await ctx.deleteMessage(replyMessageId);
 
     return true;
