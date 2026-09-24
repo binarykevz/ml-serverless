@@ -467,6 +467,8 @@ export async function handlePendingCodeReply(ctx: MyCtx): Promise<boolean> {
       vcMessage: "Saved from reply",
     });
 
+    // ... inside handlePendingCodeReply ...
+    
     await ctx.reply(
       `✅ Verification code saved.\n\n` +
       `🆔 Game ID: \`${pending.game_id}\`\n` +
@@ -476,10 +478,20 @@ export async function handlePendingCodeReply(ctx: MyCtx): Promise<boolean> {
       { parse_mode: 'Markdown' }
     );
 
-    // FIX: deleteMessage takes messageId, not AbortSignal
-    await ctx.deleteMessage(replyMessageId);
+    // ✅ FIXED: Use ctx.api.deleteMessage explicitly
+    // We wrap it in try/catch because if the message was already deleted or blocked, 
+    // we don't want the whole handler to crash.
+    try {
+      await ctx.api.deleteMessage({
+        chat_id: ctx.chat!.id, // Safe assertion as we checked chat earlier
+        message_id: replyMessageId
+      });
+    } catch (deleteError) {
+      console.warn("Could not delete prompt message:", deleteError);
+    }
 
     return true;
+    
   } catch (error: any) {
     console.error("Save Fail:", error);
     await ctx.reply(`❌ Failed to save: ${error.message}`);
