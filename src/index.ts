@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import type { Env, Update } from './types';
+import { Bot } from 'grammy';
+import type { Env } from './types';
 import { 
   handleStart, 
   handleHelp,
@@ -24,67 +25,50 @@ app.post('/', async (c) => {
     return c.text('Unauthorized', 401);
   }
 
-  let update: Update;
-  try {
-    update = await c.req.json();
-  } catch (e) {
-    return c.text('Bad Request', 400);
-  }
+  // Initialize Bot with Environment Variables
+  const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
-  const msg = update.message;
-  if (!msg || !msg.text) {
-    return c.text('OK', 200);
-  }
+  // Global Middleware: Handle Errors
+  bot.catch(async (err) => {
+    console.error('Global Bot Error:', err);
+    // Optionally notify admin or user
+  });
 
-  const text = msg.text.trim();
-  const isCommand = text.startsWith('/');
+  // Command Routing
+  bot.command('start', handleStart);
+  bot.command('help', handleHelp);
+  bot.command('link', handleLink);
+  bot.command('unlink', handleUnlink);
+  bot.command('sendvc', handleSendVC);
+  bot.command('claim', handleClaim);
+  bot.command('redeem', handleClaim); // Alias
+  bot.command('status', handleStatus);
+  bot.command('cancel', handleCancel);
+  bot.command('clear', handleClear);
 
-  if (!isCommand) {
-    const handled = await handlePendingCodeReply(env, msg);
+  // Text Handler for Verification Codes (Non-command replies)
+  bot.on('message:text', async (ctx) => {
+    // If it's a command, skip (commands are handled above)
+    if (ctx.message?.text?.startsWith('/')) {
+      return;
+    }
+    
+    // Check if it's a reply to a pending VC
+    const handled = await handlePendingCodeReply(ctx);
     if (handled) {
-      return c.text('OK', 200);
+      return;
     }
-    return c.text('OK', 200);
-  }
+    
+    // Ignore other text messages silently
+  });
 
-  const cmd = text.split(/\s+/)[0].split('@')[0].toLowerCase();
-  
-  try {
-    switch (cmd) {
-      case '/start':
-      case '/help':
-        await handleStart(env, msg);
-        break;
-      case '/link':
-        await handleLink(env, msg);
-        break;
-      case '/unlink':
-        await handleUnlink(env, msg);
-        break;
-      case '/sendvc':
-        await handleSendVC(env, msg);
-        break;
-      case '/claim':
-      case '/redeem':
-        await handleClaim(env, msg);
-        break;
-      case '/status':
-        await handleStatus(env, msg);
-        break;
-      case '/cancel':
-        await handleCancel(env, msg);
-        break;
-      case '/clear':
-        await handleClear(env, msg);
-        break;
-      default:
-         // Unknown command ignored
-    }
-  } catch (error: any) {
-    console.error('Handler Error:', error);
-  }
+  // Process the update using Grammy's webhook callback
+  // This converts the Hono Request into a Grammy Update and runs the bot logic
+  const response = await bot.webhookCallback(c.req.raw, {
+    secretToken: env.TELEGRAM_WEBHOOK_SECRET,
+  });
 
-  return c.text('OK', 200);
+  return response;
 });
 
 export default app;
